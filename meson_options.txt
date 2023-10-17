@@ -14,6 +14,11 @@ option(
     description: 'The X locale root [default=$datadir/X11/locale]',
 )
 option(
+    'bash-completion-path',
+    type: 'string',
+    description: 'Directory for bash completion scripts'
+)
+option(
     'default-rules',
     type: 'string',
     value: 'evdev',
@@ -44,6 +49,12 @@ option(
     description: 'Default XKB options',
 )
 option(
+    'enable-tools',
+    type: 'boolean',
+    value: true,
+    description: 'Enable building tools',
+)
+option(
     'enable-x11',
     type: 'boolean',
     value: true,
@@ -56,14 +67,26 @@ option(
     description: 'Enable building the documentation',
 )
 option(
+    'enable-cool-uris',
+    type: 'boolean',
+    value: false,
+    description: 'Enable creating redirections to maintain stable documentation pages',
+)
+option(
     'enable-wayland',
     type: 'boolean',
     value: true,
-    description: 'Enable support for Wayland utility programs',
+    description: 'Enable support for Wayland utility programs (requires enable-tools)',
 )
 option(
     'enable-xkbregistry',
     type: 'boolean',
     value: true,
     description: 'Enable building libxkbregistry',
+)
+option(
+    'enable-bash-completion',
+    type: 'boolean',
+    value: true,
+    description: 'Enable installing bash completion scripts',
 )

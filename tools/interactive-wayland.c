@@ -42,7 +42,11 @@
 #include "xdg-shell-client-protocol.h"
 #include <wayland-util.h>
 
-#define MAX(a, b) ((a) > (b) ? (a) : (b))
+#define MIN(a, b) ((a) < (b) ? (a) : (b))
+
+/* Offset between evdev keycodes (where KEY_ESCAPE is 1), and the evdev XKB
+ * keycode set (where ESC is 9). */
+#define EVDEV_OFFSET 8
 
 struct interactive_dpy {
     struct wl_display *dpy;
@@ -395,11 +399,12 @@ kbd_key(void *data, struct wl_keyboard *wl_kbd, uint32_t serial, uint32_t time,
         return;
 
     printf("%s: ", seat->name_str);
-    tools_print_keycode_state(seat->state, NULL, key + 8,
-                              XKB_CONSUMED_MODE_XKB);
+    tools_print_keycode_state(seat->state, NULL, key + EVDEV_OFFSET,
+                              XKB_CONSUMED_MODE_XKB,
+                              PRINT_ALL_FIELDS);
 
     /* Exit on ESC. */
-    if (xkb_state_key_get_one_sym(seat->state, key + 8) == XKB_KEY_Escape)
+    if (xkb_state_key_get_one_sym(seat->state, key + EVDEV_OFFSET) == XKB_KEY_Escape)
         terminate = true;
 }
 
@@ -557,7 +562,7 @@ seat_create(struct interactive_dpy *inter, struct wl_registry *registry,
     seat->global_name = name;
     seat->inter = inter;
     seat->wl_seat = wl_registry_bind(registry, name, &wl_seat_interface,
-                                     MAX(version, 5));
+                                     MIN(version, 5));
     wl_seat_add_listener(seat->wl_seat, &seat_listener, seat);
     ret = asprintf(&seat->name_str, "seat:%d",
                    wl_proxy_get_id((struct wl_proxy *) seat->wl_seat));
@@ -607,17 +612,17 @@ registry_global(void *data, struct wl_registry *registry, uint32_t name,
     else if (strcmp(interface, "xdg_wm_base") == 0) {
         inter->shell = wl_registry_bind(registry, name,
                                         &xdg_wm_base_interface,
-                                        MAX(version, 2));
+                                        MIN(version, 2));
         xdg_wm_base_add_listener(inter->shell, &shell_listener, inter);
     }
     else if (strcmp(interface, "wl_compositor") == 0) {
         inter->compositor = wl_registry_bind(registry, name,
                                              &wl_compositor_interface,
-                                             MAX(version, 1));
+                                             MIN(version, 1));
     }
     else if (strcmp(interface, "wl_shm") == 0) {
         inter->shm = wl_registry_bind(registry, name, &wl_shm_interface,
-                                      MAX(version, 1));
+                                      MIN(version, 1));
     }
 }
 

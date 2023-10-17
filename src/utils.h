@@ -31,13 +31,21 @@
 #include <stdio.h>
 #include <string.h>
 #if HAVE_UNISTD_H
-#include <unistd.h>
+# include <unistd.h>
 #else
 /* Required on Windows where unistd.h doesn't exist */
-#define R_OK    4               /* Test for read permission.  */
-#define W_OK    2               /* Test for write permission.  */
-#define X_OK    1               /* Test for execute permission.  */
-#define F_OK    0               /* Test for existence.  */
+# define R_OK    4               /* Test for read permission.  */
+# define W_OK    2               /* Test for write permission.  */
+# define X_OK    1               /* Test for execute permission.  */
+# define F_OK    0               /* Test for existence.  */
+#endif
+
+#ifdef _WIN32
+# include <direct.h>
+# include <io.h>
+# ifndef S_ISDIR
+#  define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
+# endif
 #endif
 
 #include "darray.h"
@@ -53,6 +61,18 @@
 
 /* Round up @a so it's divisible by @b. */
 #define ROUNDUP(a, b) (((a) + (b) - 1) / (b) * (b))
+
+#define STRINGIFY(x) #x
+#define STRINGIFY2(x) STRINGIFY(x)
+
+/* Check if a character is valid in a string literal */
+static inline bool
+is_valid_char(char c)
+{
+    /* Currently we only check for NULL character, but this could be extended
+     * in the future to further ASCII control characters. */
+    return c != 0;
+}
 
 char
 to_lower(char c);
@@ -261,7 +281,9 @@ check_eaccess(const char *path, int mode)
 # define XKB_EXPORT
 #endif
 
-#if defined(__GNUC__) && ((__GNUC__ * 100 + __GNUC_MINOR__) >= 203)
+#if defined(__MINGW32__)
+# define ATTR_PRINTF(x,y) __attribute__((__format__(__MINGW_PRINTF_FORMAT, x, y)))
+#elif defined(__GNUC__) && ((__GNUC__ * 100 + __GNUC_MINOR__) >= 203)
 # define ATTR_PRINTF(x,y) __attribute__((__format__(__printf__, x, y)))
 #else /* not gcc >= 2.3 */
 # define ATTR_PRINTF(x,y)

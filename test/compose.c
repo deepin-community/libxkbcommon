@@ -560,6 +560,145 @@ test_include(struct xkb_context *ctx)
     free(table_string);
 }
 
+static void
+test_override(struct xkb_context *ctx)
+{
+    const char *table_string = "<dead_circumflex> <dead_circumflex> : \"foo\" X\n"
+                               "<dead_circumflex> <e> : \"bar\" Y\n"
+                               "<dead_circumflex> <dead_circumflex> <e> : \"baz\" Z\n";
+
+    assert(test_compose_seq_buffer(ctx, table_string,
+        /* Comes after - does override. */
+        XKB_KEY_dead_circumflex, XKB_COMPOSE_FEED_ACCEPTED,  XKB_COMPOSE_COMPOSING,  "",     XKB_KEY_NoSymbol,
+        XKB_KEY_dead_circumflex, XKB_COMPOSE_FEED_ACCEPTED,  XKB_COMPOSE_COMPOSING,  "",     XKB_KEY_NoSymbol,
+        XKB_KEY_e,               XKB_COMPOSE_FEED_ACCEPTED,  XKB_COMPOSE_COMPOSED,   "baz",  XKB_KEY_Z,
+
+        /* Override does not affect sibling nodes */
+        XKB_KEY_dead_circumflex, XKB_COMPOSE_FEED_ACCEPTED,  XKB_COMPOSE_COMPOSING,  "",     XKB_KEY_NoSymbol,
+        XKB_KEY_e,               XKB_COMPOSE_FEED_ACCEPTED,  XKB_COMPOSE_COMPOSED,   "bar",  XKB_KEY_Y,
+
+        XKB_KEY_NoSymbol));
+}
+
+static bool
+test_eq_entry_va(struct xkb_compose_table_entry *entry, xkb_keysym_t keysym_ref, const char *utf8_ref, va_list ap)
+{
+    assert (entry != NULL);
+
+    assert (xkb_compose_table_entry_keysym(entry) == keysym_ref);
+
+    const char *utf8 = xkb_compose_table_entry_utf8(entry);
+    assert (utf8 && utf8_ref && strcmp(utf8, utf8_ref) == 0);
+
+    size_t nsyms;
+    const xkb_keysym_t *sequence = xkb_compose_table_entry_sequence(entry, &nsyms);
+
+    xkb_keysym_t keysym;
+    for (unsigned k = 0; ; k++) {
+        keysym = va_arg(ap, xkb_keysym_t);
+        if (keysym == XKB_KEY_NoSymbol) {
+            return (k == nsyms - 1);
+        }
+        assert (k < nsyms);
+        assert (keysym == sequence[k]);
+    }
+}
+
+static bool
+test_eq_entry(struct xkb_compose_table_entry *entry, xkb_keysym_t keysym, const char *utf8, ...)
+{
+    va_list ap;
+    bool ok;
+    va_start(ap, utf8);
+    ok = test_eq_entry_va(entry, keysym, utf8, ap);
+    va_end(ap);
+    return ok;
+}
+
+static void
+test_traverse(struct xkb_context *ctx)
+{
+    struct xkb_compose_table *table;
+
+    const char *buffer = "<dead_circumflex> <dead_circumflex> : \"foo\" X\n"
+                         "<Ahook> <x> : \"foobar\"\n"
+                         "<Multi_key> <o> <e> : oe\n"
+                         "<dead_circumflex> <e> : \"bar\" Y\n"
+                         "<Multi_key> <a> <e> : \"æ\" ae\n"
+                         "<dead_circumflex> <a> : \"baz\" Z\n"
+                         "<dead_acute> <e> : \"é\" eacute\n"
+                         "<Multi_key> <a> <a> <c>: \"aac\"\n"
+                         "<Multi_key> <a> <a> <b>: \"aab\"\n"
+                         "<Multi_key> <a> <a> <a>: \"aaa\"\n";
+
+    table = xkb_compose_table_new_from_buffer(ctx, buffer, strlen(buffer), "",
+                                              XKB_COMPOSE_FORMAT_TEXT_V1,
+                                              XKB_COMPOSE_COMPILE_NO_FLAGS);
+    assert(table);
+
+    struct xkb_compose_table_iterator *iter = xkb_compose_table_iterator_new(table);
+
+    test_eq_entry(xkb_compose_table_iterator_next(iter),
+                  XKB_KEY_eacute, "é",
+                  XKB_KEY_dead_acute, XKB_KEY_e, XKB_KEY_NoSymbol);
+
+    test_eq_entry(xkb_compose_table_iterator_next(iter),
+                  XKB_KEY_Z, "baz",
+                  XKB_KEY_dead_circumflex, XKB_KEY_a, XKB_KEY_NoSymbol);
+
+    test_eq_entry(xkb_compose_table_iterator_next(iter),
+                  XKB_KEY_Y, "bar",
+                  XKB_KEY_dead_circumflex, XKB_KEY_e, XKB_KEY_NoSymbol);
+
+    test_eq_entry(xkb_compose_table_iterator_next(iter),
+                  XKB_KEY_X, "foo",
+                  XKB_KEY_dead_circumflex, XKB_KEY_dead_circumflex, XKB_KEY_NoSymbol);
+
+    test_eq_entry(xkb_compose_table_iterator_next(iter),
+                  XKB_KEY_NoSymbol, "aaa",
+                  XKB_KEY_Multi_key, XKB_KEY_a, XKB_KEY_a, XKB_KEY_a, XKB_KEY_NoSymbol);
+
+    test_eq_entry(xkb_compose_table_iterator_next(iter),
+                  XKB_KEY_NoSymbol, "aab",
+                  XKB_KEY_Multi_key, XKB_KEY_a, XKB_KEY_a, XKB_KEY_b, XKB_KEY_NoSymbol);
+
+    test_eq_entry(xkb_compose_table_iterator_next(iter),
+                  XKB_KEY_NoSymbol, "aac",
+                  XKB_KEY_Multi_key, XKB_KEY_a, XKB_KEY_a, XKB_KEY_c, XKB_KEY_NoSymbol);
+
+    test_eq_entry(xkb_compose_table_iterator_next(iter),
+                  XKB_KEY_ae, "æ",
+                  XKB_KEY_Multi_key, XKB_KEY_a, XKB_KEY_e, XKB_KEY_NoSymbol);
+
+    test_eq_entry(xkb_compose_table_iterator_next(iter),
+                  XKB_KEY_oe, "",
+                  XKB_KEY_Multi_key, XKB_KEY_o, XKB_KEY_e, XKB_KEY_NoSymbol);
+
+    test_eq_entry(xkb_compose_table_iterator_next(iter),
+                  XKB_KEY_NoSymbol, "foobar",
+                  XKB_KEY_Ahook, XKB_KEY_x, XKB_KEY_NoSymbol);
+
+    assert (xkb_compose_table_iterator_next(iter) == NULL);
+
+    xkb_compose_table_iterator_free(iter);
+    xkb_compose_table_unref(table);
+}
+
+static void
+test_escape_sequences(struct xkb_context *ctx)
+{
+    /* The following escape sequences should be ignored:
+     * • \401 overflows
+     * • \0 and \x0 produce NULL
+     */
+    const char *table_string = "<o> <e> : \"\\401f\\x0o\\0o\" X\n";
+
+    assert(test_compose_seq_buffer(ctx, table_string,
+        XKB_KEY_o, XKB_COMPOSE_FEED_ACCEPTED, XKB_COMPOSE_COMPOSING,  "",     XKB_KEY_NoSymbol,
+        XKB_KEY_e, XKB_COMPOSE_FEED_ACCEPTED, XKB_COMPOSE_COMPOSED,   "foo",  XKB_KEY_X,
+        XKB_KEY_NoSymbol));
+}
+
 int
 main(int argc, char *argv[])
 {
@@ -568,6 +707,22 @@ main(int argc, char *argv[])
     ctx = test_get_context(CONTEXT_NO_FLAG);
     assert(ctx);
 
+    /*
+     * Ensure no environment variables but “top_srcdir” is set. This ensures
+     * that user Compose file paths are unset before the tests and set
+     * explicitely when necessary.
+     */
+#ifdef __linux__
+    const char *srcdir = getenv("top_srcdir");
+    clearenv();
+    setenv("top_srcdir", srcdir, 1);
+#else
+    unsetenv("XCOMPOSEFILE");
+    unsetenv("XDG_CONFIG_HOME");
+    unsetenv("HOME");
+    unsetenv("XLOCALEDIR");
+#endif
+
     test_seqs(ctx);
     test_conflicting(ctx);
     test_XCOMPOSEFILE(ctx);
@@ -575,6 +730,9 @@ main(int argc, char *argv[])
     test_state(ctx);
     test_modifier_syntax(ctx);
     test_include(ctx);
+    test_override(ctx);
+    test_traverse(ctx);
+    test_escape_sequences(ctx);
 
     xkb_context_unref(ctx);
     return 0;

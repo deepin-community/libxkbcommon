@@ -72,6 +72,7 @@ struct rxkb_context {
     enum context_state context_state;
 
     bool load_extra_rules_files;
+    bool use_secure_getenv;
 
     struct list models;         /* list of struct rxkb_models */
     struct list layouts;        /* list of struct rxkb_layouts */
@@ -437,6 +438,17 @@ DECLARE_REF_UNREF_FOR_TYPE(rxkb_context);
 DECLARE_CREATE_FOR_TYPE(rxkb_context);
 DECLARE_TYPED_GETTER_FOR_TYPE(rxkb_context, log_level, enum rxkb_log_level);
 
+static char *
+rxkb_context_getenv(struct rxkb_context *ctx, const char *name)
+{
+    if (ctx->use_secure_getenv) {
+        return secure_getenv(name);
+    } else {
+        return getenv(name);
+    }
+}
+
+
 XKB_EXPORT void
 rxkb_context_set_log_level(struct rxkb_context *ctx,
                            enum rxkb_log_level level)
@@ -508,11 +520,12 @@ rxkb_context_new(enum rxkb_context_flags flags)
 
     ctx->context_state = CONTEXT_NEW;
     ctx->load_extra_rules_files = flags & RXKB_CONTEXT_LOAD_EXOTIC_RULES;
+    ctx->use_secure_getenv = !(flags & RXKB_CONTEXT_NO_SECURE_GETENV);
     ctx->log_fn = default_log_fn;
     ctx->log_level = RXKB_LOG_LEVEL_ERROR;
 
     /* Environment overwrites defaults. */
-    env = secure_getenv("RXKB_LOG_LEVEL");
+    env = rxkb_context_getenv(ctx, "RXKB_LOG_LEVEL");
     if (env)
         rxkb_context_set_log_level(ctx, log_level(env));
 
@@ -551,18 +564,14 @@ rxkb_context_include_path_append(struct rxkb_context *ctx, const char *path)
         return false;
     }
 
-    tmp = strdup(path);
-    if (!tmp)
-        goto err;
-
     err = stat(path, &stat_buf);
     if (err != 0)
-        goto err;
+        return false;
     if (!S_ISDIR(stat_buf.st_mode))
-        goto err;
+        return false;
 
     if (!check_eaccess(path, R_OK | X_OK))
-        goto err;
+        return false;
 
     /* Pre-filter for the 99.9% case - if we can't assemble the default ruleset
      * path, complain here instead of during parsing later. The niche cases
@@ -570,22 +579,22 @@ rxkb_context_include_path_append(struct rxkb_context *ctx, const char *path)
      */
     if (!snprintf_safe(rules, sizeof(rules), "%s/rules/%s.xml",
                        path, DEFAULT_XKB_RULES))
-        goto err;
+        return false;
+
+    tmp = strdup(path);
+    if (!tmp)
+        return false;
 
     darray_append(ctx->includes, tmp);
 
     return true;
-
-err:
-    free(tmp);
-    return false;
 }
 
 XKB_EXPORT bool
 rxkb_context_include_path_append_default(struct rxkb_context *ctx)
 {
     const char *home, *xdg, *root, *extra;
-    char *user_path;
+    char user_path[PATH_MAX];
     bool ret = false;
 
     if (ctx->context_state != CONTEXT_NEW) {
@@ -593,39 +602,30 @@ rxkb_context_include_path_append_default(struct rxkb_context *ctx)
         return false;
     }
 
-    home = secure_getenv("HOME");
+    home = rxkb_context_getenv(ctx, "HOME");
 
-    xdg = secure_getenv("XDG_CONFIG_HOME");
+    xdg = rxkb_context_getenv(ctx, "XDG_CONFIG_HOME");
     if (xdg != NULL) {
-        user_path = asprintf_safe("%s/xkb", xdg);
-        if (user_path) {
+        if (snprintf_safe(user_path, sizeof(user_path), "%s/xkb", xdg))
             ret |= rxkb_context_include_path_append(ctx, user_path);
-            free(user_path);
-        }
     } else if (home != NULL) {
         /* XDG_CONFIG_HOME fallback is $HOME/.config/ */
-        user_path = asprintf_safe("%s/.config/xkb", home);
-        if (user_path) {
+        if (snprintf_safe(user_path, sizeof(user_path), "%s/.config/xkb", home))
             ret |= rxkb_context_include_path_append(ctx, user_path);
-            free(user_path);
-        }
     }
 
     if (home != NULL) {
-        user_path = asprintf_safe("%s/.xkb", home);
-        if (user_path) {
+        if (snprintf_safe(user_path, sizeof(user_path), "%s/.xkb", home))
             ret |= rxkb_context_include_path_append(ctx, user_path);
-            free(user_path);
-        }
     }
 
-    extra = secure_getenv("XKB_CONFIG_EXTRA_PATH");
+    extra = rxkb_context_getenv(ctx, "XKB_CONFIG_EXTRA_PATH");
     if (extra != NULL)
         ret |= rxkb_context_include_path_append(ctx, extra);
     else
         ret |= rxkb_context_include_path_append(ctx, DFLT_XKB_CONFIG_EXTRA_PATH);
 
-    root = secure_getenv("XKB_CONFIG_ROOT");
+    root = rxkb_context_getenv(ctx, "XKB_CONFIG_ROOT");
     if (root != NULL)
         ret |= rxkb_context_include_path_append(ctx, root);
     else
@@ -808,6 +808,11 @@ parse_language_list(xmlNode *language_list, struct rxkb_layout *layout)
             char *str = extract_text(node);
             struct rxkb_object *parent;
 
+            if (!str || strlen(str) != 3) {
+                free(str);
+                continue;
+            }
+
             parent = &layout->base;
             code = rxkb_iso639_code_create(parent);
             code->code = str;
@@ -826,6 +831,11 @@ parse_country_list(xmlNode *country_list, struct rxkb_layout *layout)
         if (is_node(node, "iso3166Id")) {
             char *str = extract_text(node);
             struct rxkb_object *parent;
+
+            if (!str || strlen(str) != 2) {
+                free(str);
+                continue;
+            }
 
             parent = &layout->base;
             code = rxkb_iso3166_code_create(parent);
@@ -860,7 +870,8 @@ parse_variant(struct rxkb_context *ctx, struct rxkb_layout *l,
             v->name = strdup(l->name);
             v->variant = name;
             v->description = description;
-            v->brief = brief;
+            // if variant omits brief, inherit from parent layout.
+            v->brief = brief == NULL ? strdup_safe(l->brief) : brief;
             v->popularity = popularity;
             list_append(&ctx->layouts, &v->base.link);
 
@@ -870,11 +881,35 @@ parse_variant(struct rxkb_context *ctx, struct rxkb_layout *l,
                 if (!is_node(ci, "configItem"))
                     continue;
 
+                bool found_language_list = false;
+                bool found_country_list = false;
                 for (node = ci->children; node; node = node->next) {
-                    if (is_node(node, "languageList"))
+                    if (is_node(node, "languageList")) {
                         parse_language_list(node, v);
-                    if (is_node(node, "countryList"))
+                        found_language_list = true;
+                    }
+                    if (is_node(node, "countryList")) {
                         parse_country_list(node, v);
+                        found_country_list = true;
+                    }
+                }
+                if (!found_language_list) {
+                    // inherit from parent layout
+                    struct rxkb_iso639_code* x;
+                    list_for_each(x, &l->iso639s, base.link) {
+                        struct rxkb_iso639_code* code = rxkb_iso639_code_create(&v->base);
+                        code->code = strdup(x->code);
+                        list_append(&v->iso639s, &code->base.link);
+                    }
+                }
+                if (!found_country_list) {
+                    // inherit from parent layout
+                    struct rxkb_iso3166_code* x;
+                    list_for_each(x, &l->iso3166s, base.link) {
+                        struct rxkb_iso3166_code* code = rxkb_iso3166_code_create(&v->base);
+                        code->code = strdup(x->code);
+                        list_append(&v->iso3166s, &code->base.link);
+                    }
                 }
             }
         } else {
@@ -1197,7 +1232,6 @@ parse(struct rxkb_context *ctx, const char *path,
     success = true;
 error:
     xmlFreeDoc(doc);
-    xmlCleanupParser();
 
     return success;
 }

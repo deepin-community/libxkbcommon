@@ -83,6 +83,7 @@ ReportNotArray(struct xkb_context *ctx, const char *type, const char *field,
                const char *name)
 {
     log_err(ctx,
+            XKB_ERROR_WRONG_FIELD_TYPE,
             "The %s %s field is not an array; "
             "Ignoring illegal assignment in %s\n",
             type, field, name);
@@ -94,6 +95,7 @@ ReportShouldBeArray(struct xkb_context *ctx, const char *type,
                     const char *field, const char *name)
 {
     log_err(ctx,
+            XKB_ERROR_EXPECTED_ARRAY_ENTRY,
             "Missing subscript for %s %s; "
             "Ignoring illegal assignment in %s\n",
             type, field, name);
@@ -101,10 +103,11 @@ ReportShouldBeArray(struct xkb_context *ctx, const char *type,
 }
 
 static inline bool
-ReportBadType(struct xkb_context *ctx, const char *type, const char *field,
-              const char *name, const char *wanted)
+ReportBadType(struct xkb_context *ctx, xkb_message_code_t code, const char *type,
+              const char *field, const char *name, const char *wanted)
 {
-    log_err(ctx, "The %s %s field must be a %s; "
+    log_err(ctx, code,
+            "The %s %s field must be a %s; "
             "Ignoring illegal assignment in %s\n",
             type, field, wanted, name);
     return false;
@@ -114,7 +117,7 @@ static inline bool
 ReportBadField(struct xkb_context *ctx, const char *type, const char *field,
                const char *name)
 {
-    log_err(ctx,
+    log_err(ctx, XKB_LOG_MESSAGE_NO_ID,
             "Unknown %s field %s in %s; "
             "Ignoring assignment to unknown field in %s\n",
             type, field, name, name);

@@ -64,7 +64,7 @@ get_name(const struct name_keysym *entry)
 XKB_EXPORT int
 xkb_keysym_get_name(xkb_keysym_t ks, char *buffer, size_t size)
 {
-    if ((ks & ((unsigned long) ~0x1fffffff)) != 0) {
+    if (ks > XKB_KEYSYM_MAX) {
         snprintf(buffer, size, "Invalid");
         return -1;
     }
@@ -207,6 +207,8 @@ xkb_keysym_from_name(const char *name, enum xkb_keysym_flags flags)
     }
     else if (name[0] == '0' && (name[1] == 'x' || (icase && name[1] == 'X'))) {
         if (!parse_keysym_hex(&name[2], &val))
+            return XKB_KEY_NoSymbol;
+        if (val > XKB_KEYSYM_MAX)
             return XKB_KEY_NoSymbol;
         return (xkb_keysym_t) val;
     }
@@ -743,9 +745,9 @@ XConvertCase(xkb_keysym_t sym, xkb_keysym_t *lower, xkb_keysym_t *upper)
 	break;
     case 6: /* Cyrillic */
 	/* Assume the KeySym is a legal value (ignore discontinuities) */
-	if (sym >= XKB_KEY_Serbian_DJE && sym <= XKB_KEY_Serbian_DZE)
+	if (sym >= XKB_KEY_Serbian_DJE && sym <= XKB_KEY_Cyrillic_DZHE)
 	    *lower -= (XKB_KEY_Serbian_DJE - XKB_KEY_Serbian_dje);
-	else if (sym >= XKB_KEY_Serbian_dje && sym <= XKB_KEY_Serbian_dze)
+	else if (sym >= XKB_KEY_Serbian_dje && sym <= XKB_KEY_Cyrillic_dzhe)
 	    *upper += (XKB_KEY_Serbian_DJE - XKB_KEY_Serbian_dje);
 	else if (sym >= XKB_KEY_Cyrillic_YU && sym <= XKB_KEY_Cyrillic_HARDSIGN)
 	    *lower -= (XKB_KEY_Cyrillic_YU - XKB_KEY_Cyrillic_yu);
