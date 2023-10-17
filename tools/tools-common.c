@@ -32,6 +32,7 @@
 
 #include "config.h"
 
+#include <ctype.h>
 #include <errno.h>
 #include <limits.h>
 #include <fcntl.h>
@@ -39,7 +40,7 @@
 #include <string.h>
 #include <sys/types.h>
 #include <sys/stat.h>
-#ifdef _MSC_VER
+#ifdef _WIN32
 #include <io.h>
 #include <windows.h>
 #else
@@ -49,11 +50,104 @@
 
 #include "tools-common.h"
 
+static void
+print_keycode(struct xkb_keymap *keymap, const char* prefix,
+              xkb_keycode_t keycode, const char *suffix) {
+    const char *keyname = xkb_keymap_key_get_name(keymap, keycode);
+    if (keyname) {
+        printf("%s%-4s%s", prefix, keyname, suffix);
+    } else {
+        printf("%s%-4d%s", prefix, keycode, suffix);
+    }
+}
+
+#ifdef ENABLE_PRIVATE_APIS
+#include "src/keymap.h"
+
+void
+print_keymap_modmaps(struct xkb_keymap *keymap) {
+    printf("Modifiers mapping:\n");
+    for (xkb_mod_index_t vmod = 0; vmod < xkb_keymap_num_mods(keymap); vmod++) {
+        if (keymap->mods.mods[vmod].type & MOD_REAL)
+            continue;
+        printf("- %s: ", xkb_keymap_mod_get_name(keymap, vmod));
+        if (keymap->mods.mods[vmod].mapping) {
+            bool first = true;
+            for (xkb_mod_index_t mod = 0; mod < xkb_keymap_num_mods(keymap); mod++) {
+                if (keymap->mods.mods[vmod].mapping & (1u << mod)) {
+                    if (first) {
+                        first = false;
+                        printf("%s", xkb_keymap_mod_get_name(keymap, mod));
+                    } else {
+                        printf("+ %s", xkb_keymap_mod_get_name(keymap, mod));
+                    }
+                }
+            }
+        } else {
+            printf("(unmapped)");
+        }
+        printf("\n");
+    }
+}
+
+#define MODMAP_PADDING  7
+#define VMODMAP_PADDING 9
+static void
+print_key_modmaps(struct xkb_keymap *keymap, xkb_keycode_t keycode) {
+    const struct xkb_key *key = XkbKey(keymap, keycode);
+    if (key != NULL) {
+        xkb_mod_index_t mod;
+
+        printf("modmap [ ");
+        if (key->modmap) {
+            for (mod = 0; mod < xkb_keymap_num_mods(keymap); mod++) {
+                if (key->modmap & (1u << mod)) {
+                    printf("%-*s", (int) MODMAP_PADDING,
+                           xkb_keymap_mod_get_name(keymap, mod));
+                    break;
+                }
+            }
+        } else {
+            printf("%*c", (int) MODMAP_PADDING, ' ');
+        }
+
+        printf(" ] vmodmap [ ");
+        int length = 0;
+        const char *mod_name;
+        for (mod = 0; mod < xkb_keymap_num_mods(keymap); mod++) {
+            if (key->vmodmap & (1u << mod)) {
+                mod_name = xkb_keymap_mod_get_name(keymap, mod);
+                length += strlen(mod_name) + 1;
+                printf("%s ", mod_name);
+            }
+        }
+        if (length < VMODMAP_PADDING) {
+            printf("%*c", (int) VMODMAP_PADDING - length, ' ');
+        }
+        printf("] ");
+    }
+}
+
+void
+print_keys_modmaps(struct xkb_keymap *keymap) {
+    const struct xkb_key *key;
+    printf("Keys modmaps:\n");
+    xkb_keys_foreach(key, keymap) {
+        if (key->modmap || key->vmodmap) {
+            print_keycode(keymap, "- ", key->keycode, ": ");
+            print_key_modmaps(keymap, key->keycode);
+            putchar('\n');
+        }
+    }
+}
+#endif
+
 void
 tools_print_keycode_state(struct xkb_state *state,
                           struct xkb_compose_state *compose_state,
                           xkb_keycode_t keycode,
-                          enum xkb_consumed_mode consumed_mode)
+                          enum xkb_consumed_mode consumed_mode,
+                          print_state_fields_mask_t fields)
 {
     struct xkb_keymap *keymap;
 
@@ -88,6 +182,14 @@ tools_print_keycode_state(struct xkb_state *state,
         syms = &sym;
     }
 
+    print_keycode(keymap, "keycode [ ", keycode, " ] ");
+
+#ifdef ENABLE_PRIVATE_APIS
+    if (fields & PRINT_MODMAPS) {
+        print_key_modmaps(keymap, keycode);
+    }
+#endif
+
     printf("keysyms [ ");
     for (int i = 0; i < nsyms; i++) {
         xkb_keysym_get_name(syms[i], s, sizeof(s));
@@ -95,15 +197,29 @@ tools_print_keycode_state(struct xkb_state *state,
     }
     printf("] ");
 
-    if (status == XKB_COMPOSE_COMPOSED)
-        xkb_compose_state_get_utf8(compose_state, s, sizeof(s));
-    else
-        xkb_state_key_get_utf8(state, keycode, s, sizeof(s));
-    printf("unicode [ %s ] ", s);
+    if (fields & PRINT_UNICODE) {
+        if (status == XKB_COMPOSE_COMPOSED)
+            xkb_compose_state_get_utf8(compose_state, s, sizeof(s));
+        else
+            xkb_state_key_get_utf8(state, keycode, s, sizeof(s));
+        /* HACK: escape single control characters from C0 set using the
+        * Unicode codepoint convention. Ideally we would like to escape
+        * any non-printable character in the string.
+        */
+        if (!*s) {
+            printf("unicode [   ] ");
+        } else if (strlen(s) == 1 && (*s <= 0x1F || *s == 0x7F)) {
+            printf("unicode [ U+%04hX ] ", *s);
+        } else {
+            printf("unicode [ %s ] ", s);
+        }
+    }
 
     layout = xkb_state_key_get_layout(state, keycode);
-    printf("layout [ %s (%d) ] ",
-           xkb_keymap_layout_get_name(keymap, layout), layout);
+    if (fields & PRINT_LAYOUT) {
+        printf("layout [ %s (%d) ] ",
+               xkb_keymap_layout_get_name(keymap, layout), layout);
+    }
 
     printf("level [ %d ] ",
            xkb_state_key_get_level(state, keycode, layout));
@@ -160,7 +276,7 @@ tools_print_state_changes(enum xkb_state_component changed)
     printf("]\n");
 }
 
-#ifdef _MSC_VER
+#ifdef _WIN32
 void
 tools_disable_stdin_echo(void)
 {

@@ -4,7 +4,7 @@ Priority: optional
 Maintainer: Debian X Strike Force <debian-x@lists.debian.org>
 Uploaders: Michael Stapelberg <stapelberg@debian.org>
 Build-Depends:
- debhelper-compat (= 12),
+ debhelper-compat (= 13),
  bison,
  dh-exec,
  doxygen,
@@ -14,15 +14,15 @@ Build-Depends:
  pkg-config,
  quilt,
  libwayland-dev [linux-any],
- libxcb-xkb-dev (>= 1.10),
+ libxcb-xkb-dev,
  libxml2-dev,
  wayland-protocols [linux-any],
  x11-xkb-utils <!nocheck>,
  x11proto-dev,
  xkb-data <!nocheck>,
  xvfb <!nocheck>,
-Standards-Version: 4.5.0
-Homepage: http://www.xkbcommon.org/
+Standards-Version: 4.6.1
+Homepage: https://www.xkbcommon.org/
 Vcs-Git: https://salsa.debian.org/xorg-team/lib/libxkbcommon.git
 Vcs-Browser: https://salsa.debian.org/xorg-team/lib/libxkbcommon
 

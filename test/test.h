@@ -54,6 +54,12 @@ int
 test_key_seq_va(struct xkb_keymap *keymap, va_list args);
 
 char *
+test_makedir(const char *parent, const char *path);
+
+char *
+test_maketempdir(const char *template);
+
+char *
 test_get_path(const char *path_rel);
 
 char *
@@ -82,7 +88,7 @@ test_compile_rules(struct xkb_context *context, const char *rules,
                    const char *options);
 
 
-#ifdef _MSC_VER
+#ifdef _WIN32
 #define setenv(varname, value, overwrite) _putenv_s((varname), (value))
 #define unsetenv(varname) _putenv_s(varname, "")
 #endif

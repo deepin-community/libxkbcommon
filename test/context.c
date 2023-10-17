@@ -30,15 +30,6 @@
 
 #include <sys/stat.h>
 #include <sys/types.h>
-#ifdef _MSC_VER
-# include <io.h>
-# include <direct.h>
-# ifndef S_ISDIR
-#  define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
-# endif
-#else
-# include <unistd.h>
-#endif
 
 /* keeps a cache of all makedir/maketmpdir directories so we can free and
  * rmdir them in one go, see unmakedirs() */
@@ -82,29 +73,15 @@ static void restore_env(void)
 
 static const char *makedir(const char *parent, const char *path)
 {
-    char *dirname;
-    int err;
-
-    dirname = asprintf_safe("%s/%s", parent, path);
-    assert(dirname);
-    err = mkdir(dirname, 0777);
-    assert(err == 0);
-
+    char *dirname = test_makedir(parent, path);
     dirnames[ndirs++] = dirname;
-
     return dirname;
 }
 
 static const char *maketmpdir(void)
 {
-    const char *template = "/tmp/xkbcommon-test.XXXXXX";
-    char *tmpdir = strdup(template);
-
-    tmpdir = mkdtemp(tmpdir);
-    assert(tmpdir != NULL);
-
+    char *tmpdir = test_maketempdir("xkbcommon-test.XXXXXX");
     dirnames[ndirs++] = tmpdir;
-
     return tmpdir;
 }
 

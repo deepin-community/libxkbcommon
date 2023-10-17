@@ -245,16 +245,18 @@ CompileKeymap(XkbFile *file, struct xkb_keymap *keymap, enum merge_mode merge)
             file->file_type > LAST_KEYMAP_FILE_TYPE) {
             if (file->file_type == FILE_TYPE_GEOMETRY) {
                 log_vrb(ctx, 1,
+                        XKB_WARNING_UNSUPPORTED_GEOMETRY_SECTION,
                         "Geometry sections are not supported; ignoring\n");
             } else {
-                log_err(ctx, "Cannot define %s in a keymap file\n",
+                log_err(ctx, XKB_LOG_MESSAGE_NO_ID,
+                        "Cannot define %s in a keymap file\n",
                         xkb_file_type_to_string(file->file_type));
             }
             continue;
         }
 
         if (files[file->file_type]) {
-            log_err(ctx,
+            log_err(ctx, XKB_LOG_MESSAGE_NO_ID,
                     "More than one %s section in keymap file; "
                     "All sections after the first ignored\n",
                     xkb_file_type_to_string(file->file_type));
@@ -273,7 +275,8 @@ CompileKeymap(XkbFile *file, struct xkb_keymap *keymap, enum merge_mode merge)
          type <= LAST_KEYMAP_FILE_TYPE;
          type++) {
         if (files[type] == NULL) {
-            log_err(ctx, "Required section %s missing from keymap\n",
+            log_err(ctx, XKB_LOG_MESSAGE_NO_ID,
+                    "Required section %s missing from keymap\n",
                     xkb_file_type_to_string(type));
             ok = false;
         }
@@ -285,12 +288,14 @@ CompileKeymap(XkbFile *file, struct xkb_keymap *keymap, enum merge_mode merge)
     for (type = FIRST_KEYMAP_FILE_TYPE;
          type <= LAST_KEYMAP_FILE_TYPE;
          type++) {
-        log_dbg(ctx, "Compiling %s \"%s\"\n",
+        log_dbg(ctx, XKB_LOG_MESSAGE_NO_ID,
+                "Compiling %s \"%s\"\n",
                 xkb_file_type_to_string(type), files[type]->name);
 
         ok = compile_file_fns[type](files[type], keymap, merge);
         if (!ok) {
-            log_err(ctx, "Failed to compile %s\n",
+            log_err(ctx, XKB_LOG_MESSAGE_NO_ID,
+                    "Failed to compile %s\n",
                     xkb_file_type_to_string(type));
             return false;
         }

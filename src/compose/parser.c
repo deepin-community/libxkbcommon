@@ -63,9 +63,6 @@ OR PERFORMANCE OF THIS SOFTWARE.
 #include "utf8.h"
 #include "parser.h"
 
-#define MAX_LHS_LEN 10
-#define MAX_INCLUDE_DEPTH 5
-
 /*
  * Grammar adapted from libX11/modules/im/ximcp/imLcPrs.c.
  * See also the XCompose(5) manpage.
@@ -126,18 +123,18 @@ lex(struct scanner *s, union lvalue *val)
 {
 skip_more_whitespace_and_comments:
     /* Skip spaces. */
-    while (is_space(peek(s)))
-        if (next(s) == '\n')
+    while (is_space(scanner_peek(s)))
+        if (scanner_next(s) == '\n')
             return TOK_END_OF_LINE;
 
     /* Skip comments. */
-    if (chr(s, '#')) {
-        skip_to_eol(s);
+    if (scanner_chr(s, '#')) {
+        scanner_skip_to_eol(s);
         goto skip_more_whitespace_and_comments;
     }
 
     /* See if we're done. */
-    if (eof(s)) return TOK_END_OF_FILE;
+    if (scanner_eof(s)) return TOK_END_OF_FILE;
 
     /* New token. */
     s->token_line = s->line;
@@ -145,14 +142,14 @@ skip_more_whitespace_and_comments:
     s->buf_pos = 0;
 
     /* LHS Keysym. */
-    if (chr(s, '<')) {
-        while (peek(s) != '>' && !eol(s) && !eof(s))
-            buf_append(s, next(s));
-        if (!chr(s, '>')) {
+    if (scanner_chr(s, '<')) {
+        while (scanner_peek(s) != '>' && !scanner_eol(s) && !scanner_eof(s))
+            scanner_buf_append(s, scanner_next(s));
+        if (!scanner_chr(s, '>')) {
             scanner_err(s, "unterminated keysym literal");
             return TOK_ERROR;
         }
-        if (!buf_append(s, '\0')) {
+        if (!scanner_buf_append(s, '\0')) {
             scanner_err(s, "keysym literal is too long");
             return TOK_ERROR;
         }
@@ -162,46 +159,61 @@ skip_more_whitespace_and_comments:
     }
 
     /* Colon. */
-    if (chr(s, ':'))
+    if (scanner_chr(s, ':'))
         return TOK_COLON;
-    if (chr(s, '!'))
+    if (scanner_chr(s, '!'))
         return TOK_BANG;
-    if (chr(s, '~'))
+    if (scanner_chr(s, '~'))
         return TOK_TILDE;
 
     /* String literal. */
-    if (chr(s, '\"')) {
-        while (!eof(s) && !eol(s) && peek(s) != '\"') {
-            if (chr(s, '\\')) {
+    if (scanner_chr(s, '\"')) {
+        while (!scanner_eof(s) && !scanner_eol(s) && scanner_peek(s) != '\"') {
+            if (scanner_chr(s, '\\')) {
                 uint8_t o;
-                if (chr(s, '\\')) {
-                    buf_append(s, '\\');
+                size_t start_pos = s->pos;
+                if (scanner_chr(s, '\\')) {
+                    scanner_buf_append(s, '\\');
                 }
-                else if (chr(s, '"')) {
-                    buf_append(s, '"');
+                else if (scanner_chr(s, '"')) {
+                    scanner_buf_append(s, '"');
                 }
-                else if (chr(s, 'x') || chr(s, 'X')) {
-                    if (hex(s, &o))
-                        buf_append(s, (char) o);
-                    else
-                        scanner_warn(s, "illegal hexadecimal escape sequence in string literal");
+                else if (scanner_chr(s, 'x') || scanner_chr(s, 'X')) {
+                    if (scanner_hex(s, &o) && is_valid_char((char) o)) {
+                        scanner_buf_append(s, (char) o);
+                    } else {
+                        scanner_warn_with_code(s,
+                            XKB_WARNING_INVALID_ESCAPE_SEQUENCE,
+                            "illegal hexadecimal escape sequence (%.*s) in string literal",
+                            (int) (s->pos - start_pos + 1), &s->s[start_pos - 1]);
+                    }
                 }
-                else if (oct(s, &o)) {
-                    buf_append(s, (char) o);
+                else if (scanner_oct(s, &o) && is_valid_char((char) o)) {
+                    scanner_buf_append(s, (char) o);
+                }
+                else if (s->pos > start_pos) {
+                    scanner_warn_with_code(s,
+                        XKB_WARNING_INVALID_ESCAPE_SEQUENCE,
+                        "illegal octal escape sequence (%.*s) in string literal",
+                        (int) (s->pos - start_pos + 1), &s->s[start_pos - 1]);
+                    /* Ignore. */
                 }
                 else {
-                    scanner_warn(s, "unknown escape sequence (%c) in string literal", peek(s));
+                    scanner_warn_with_code(s,
+                        XKB_WARNING_UNKNOWN_CHAR_ESCAPE_SEQUENCE,
+                        "unknown escape sequence (\\%c) in string literal",
+                        scanner_peek(s));
                     /* Ignore. */
                 }
             } else {
-                buf_append(s, next(s));
+                scanner_buf_append(s, scanner_next(s));
             }
         }
-        if (!chr(s, '\"')) {
+        if (!scanner_chr(s, '\"')) {
             scanner_err(s, "unterminated string literal");
             return TOK_ERROR;
         }
-        if (!buf_append(s, '\0')) {
+        if (!scanner_buf_append(s, '\0')) {
             scanner_err(s, "string literal is too long");
             return TOK_ERROR;
         }
@@ -215,11 +227,11 @@ skip_more_whitespace_and_comments:
     }
 
     /* Identifier or include. */
-    if (is_alpha(peek(s)) || peek(s) == '_') {
+    if (is_alpha(scanner_peek(s)) || scanner_peek(s) == '_') {
         s->buf_pos = 0;
-        while (is_alnum(peek(s)) || peek(s) == '_')
-            buf_append(s, next(s));
-        if (!buf_append(s, '\0')) {
+        while (is_alnum(scanner_peek(s)) || scanner_peek(s) == '_')
+            scanner_buf_append(s, scanner_next(s));
+        if (!scanner_buf_append(s, '\0')) {
             scanner_err(s, "identifier is too long");
             return TOK_ERROR;
         }
@@ -233,7 +245,7 @@ skip_more_whitespace_and_comments:
     }
 
     /* Discard rest of line. */
-    skip_to_eol(s);
+    scanner_skip_to_eol(s);
 
     scanner_err(s, "unrecognized token");
     return TOK_ERROR;
@@ -243,68 +255,68 @@ static enum rules_token
 lex_include_string(struct scanner *s, struct xkb_compose_table *table,
                    union lvalue *val_out)
 {
-    while (is_space(peek(s)))
-        if (next(s) == '\n')
+    while (is_space(scanner_peek(s)))
+        if (scanner_next(s) == '\n')
             return TOK_END_OF_LINE;
 
     s->token_line = s->line;
     s->token_column = s->column;
     s->buf_pos = 0;
 
-    if (!chr(s, '\"')) {
+    if (!scanner_chr(s, '\"')) {
         scanner_err(s, "include statement must be followed by a path");
         return TOK_ERROR;
     }
 
-    while (!eof(s) && !eol(s) && peek(s) != '\"') {
-        if (chr(s, '%')) {
-            if (chr(s, '%')) {
-                buf_append(s, '%');
+    while (!scanner_eof(s) && !scanner_eol(s) && scanner_peek(s) != '\"') {
+        if (scanner_chr(s, '%')) {
+            if (scanner_chr(s, '%')) {
+                scanner_buf_append(s, '%');
             }
-            else if (chr(s, 'H')) {
-                const char *home = secure_getenv("HOME");
+            else if (scanner_chr(s, 'H')) {
+                const char *home = xkb_context_getenv(table->ctx, "HOME");
                 if (!home) {
                     scanner_err(s, "%%H was used in an include statement, but the HOME environment variable is not set");
                     return TOK_ERROR;
                 }
-                if (!buf_appends(s, home)) {
+                if (!scanner_buf_appends(s, home)) {
                     scanner_err(s, "include path after expanding %%H is too long");
                     return TOK_ERROR;
                 }
             }
-            else if (chr(s, 'L')) {
-                char *path = get_locale_compose_file_path(table->locale);
+            else if (scanner_chr(s, 'L')) {
+                char *path = get_locale_compose_file_path(table->ctx, table->locale);
                 if (!path) {
                     scanner_err(s, "failed to expand %%L to the locale Compose file");
                     return TOK_ERROR;
                 }
-                if (!buf_appends(s, path)) {
+                if (!scanner_buf_appends(s, path)) {
                     free(path);
                     scanner_err(s, "include path after expanding %%L is too long");
                     return TOK_ERROR;
                 }
                 free(path);
             }
-            else if (chr(s, 'S')) {
-                const char *xlocaledir = get_xlocaledir_path();
-                if (!buf_appends(s, xlocaledir)) {
+            else if (scanner_chr(s, 'S')) {
+                const char *xlocaledir = get_xlocaledir_path(table->ctx);
+                if (!scanner_buf_appends(s, xlocaledir)) {
                     scanner_err(s, "include path after expanding %%S is too long");
                     return TOK_ERROR;
                 }
             }
             else {
-                scanner_err(s, "unknown %% format (%c) in include statement", peek(s));
+                scanner_err(s, "unknown %% format (%c) in include statement", scanner_peek(s));
                 return TOK_ERROR;
             }
         } else {
-            buf_append(s, next(s));
+            scanner_buf_append(s, scanner_next(s));
         }
     }
-    if (!chr(s, '\"')) {
+    if (!scanner_chr(s, '\"')) {
         scanner_err(s, "unterminated include statement");
         return TOK_ERROR;
     }
-    if (!buf_append(s, '\0')) {
+    if (!scanner_buf_append(s, '\0')) {
         scanner_err(s, "include path is too long");
         return TOK_ERROR;
     }
@@ -332,8 +344,8 @@ add_production(struct xkb_compose_table *table, struct scanner *s,
                const struct production *production)
 {
     unsigned lhs_pos = 0;
-    uint16_t curr = darray_size(table->nodes) == 1 ? 0 : 1;
-    uint16_t *pptr = NULL;
+    uint32_t curr = darray_size(table->nodes) == 1 ? 0 : 1;
+    uint32_t *pptr = NULL;
     struct compose_node *node = NULL;
 
     /* Warn before potentially going over the limit, discard silently after. */
@@ -387,7 +399,7 @@ add_production(struct xkb_compose_table *table, struct scanner *s,
         } else if (!last) {
             if (node->is_leaf) {
                 scanner_warn(s, "a sequence already exists which is a prefix of this sequence; overriding");
-                node->internal.eqkid = node->lokid = node->hikid = 0;
+                node->internal.eqkid = 0;
                 node->internal.is_leaf = false;
             }
             lhs_pos++;
@@ -727,7 +739,9 @@ parse_file(struct xkb_compose_table *table, FILE *file, const char *file_name)
 
     ok = map_file(file, &string, &size);
     if (!ok) {
-        log_err(table->ctx, "Couldn't read Compose file %s: %s\n",
+        log_err(table->ctx,
+                XKB_LOG_MESSAGE_NO_ID,
+                "Couldn't read Compose file %s: %s\n",
                 file_name, strerror(errno));
         return false;
     }

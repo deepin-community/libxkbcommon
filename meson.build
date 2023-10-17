@@ -1,13 +1,13 @@
 project(
     'libxkbcommon',
     'c',
-    version: '1.3.1',
+    version: '1.6.0',
     default_options: [
         'c_std=c11',
         'warning_level=2',
         'b_lundef=true',
     ],
-    meson_version : '>= 0.49.0',
+    meson_version : '>= 0.52.0',
 )
 pkgconfig = import('pkgconfig')
 cc = meson.get_compiler('c')
@@ -17,7 +17,6 @@ dir_libexec = get_option('prefix')/get_option('libexecdir')/'xkbcommon'
 # Compiler flags.
 cflags = [
     '-fno-strict-aliasing',
-    '-fsanitize-undefined-trap-on-error',
     '-Wno-unused-parameter',
     '-Wno-missing-field-initializers',
     '-Wpointer-arith',
@@ -41,7 +40,7 @@ XKBCONFIGROOT = get_option('xkb-config-root')
 if XKBCONFIGROOT == ''
     xkeyboard_config_dep = dependency('xkeyboard-config', required: false)
     if xkeyboard_config_dep.found()
-        XKBCONFIGROOT = xkeyboard_config_dep.get_pkgconfig_variable('xkb_base')
+        XKBCONFIGROOT = xkeyboard_config_dep.get_variable(pkgconfig: 'xkb_base')
     else
         XKBCONFIGROOT = get_option('prefix')/get_option('datadir')/'X11'/'xkb'
   endif
@@ -125,8 +124,6 @@ elif cc.has_header_symbol('stdlib.h', '__secure_getenv', prefix: system_ext_defi
 else
     message('C library does not support secure_getenv, using getenv instead')
 endif
-have_getopt_long = cc.has_header_symbol('getopt.h', 'getopt_long',
-                                        prefix: '#define _GNU_SOURCE')
 if not cc.has_header_symbol('limits.h', 'PATH_MAX', prefix: system_ext_define)
     if host_machine.system() == 'windows'
         # see https://docs.microsoft.com/en-us/windows/win32/fileio/naming-a-file#maximum-path-length-limitation
@@ -148,7 +145,7 @@ configh_data.set('WIN32_LEAN_AND_MEAN', 1)
 # Supports -Wl,--version-script?
 have_version_script = cc.links(
     'int main(){}',
-    args: '-Wl,--version-script=' + meson.source_root()/'xkbcommon.map',
+    args: '-Wl,--version-script=' + meson.current_source_dir()/'xkbcommon.map',
     name: '-Wl,--version-script',
 )
 
@@ -157,8 +154,9 @@ map_to_def = find_program('scripts/map-to-def')
 # libxkbcommon.
 # Note: we use some yacc extensions, which work with either GNU bison
 # (preferred) or byacc (with backtracking enabled).
-bison = find_program('bison', 'win_bison', required: false)
+bison = find_program('bison', 'win_bison', required: false, version: '>= 2.3a')
 if bison.found()
+    yacc = bison
     yacc_gen = generator(
         bison,
         output: ['@BASENAME@.c', '@BASENAME@.h'],
@@ -167,6 +165,7 @@ if bison.found()
 else
     byacc = find_program('byacc', required: false)
     if byacc.found()
+        yacc = byacc
         yacc_gen = generator(
             byacc,
             output: ['@BASENAME@.c', '@BASENAME@.h'],
@@ -222,6 +221,7 @@ libxkbcommon_sources = [
     'src/keymap.c',
     'src/keymap.h',
     'src/keymap-priv.c',
+    'src/messages-codes.h',
     'src/scanner-utils.h',
     'src/state.c',
     'src/text.c',
@@ -234,7 +234,7 @@ libxkbcommon_sources = [
 libxkbcommon_link_args = []
 libxkbcommon_link_deps = []
 if have_version_script
-    libxkbcommon_link_args += '-Wl,--version-script=' + meson.source_root()/'xkbcommon.map'
+    libxkbcommon_link_args += '-Wl,--version-script=' + meson.current_source_dir()/'xkbcommon.map'
     libxkbcommon_link_deps += 'xkbcommon.map'
 elif cc.get_argument_syntax() == 'msvc'
     libxkbcommon_def = custom_target('xkbcommon.def',
@@ -269,6 +269,9 @@ dep_libxkbcommon = declare_dependency(
     link_with: libxkbcommon,
     include_directories: include_directories('include'),
 )
+if meson.version().version_compare('>= 0.54.0')
+    meson.override_dependency('xkbcommon', dep_libxkbcommon)
+endif
 pkgconfig.generate(
     libxkbcommon,
     name: 'xkbcommon',
@@ -302,7 +305,7 @@ You can disable X11 support with -Denable-x11=false.''')
     libxkbcommon_x11_link_args = []
     libxkbcommon_x11_link_deps = []
     if have_version_script
-        libxkbcommon_x11_link_args += '-Wl,--version-script=' + meson.source_root()/'xkbcommon-x11.map'
+        libxkbcommon_x11_link_args += '-Wl,--version-script=' + meson.current_source_dir()/'xkbcommon-x11.map'
         libxkbcommon_x11_link_deps += 'xkbcommon-x11.map'
     elif cc.get_argument_syntax() == 'msvc'
         libxkbcommon_x11_def = custom_target('xkbcommon-x11.def',
@@ -337,6 +340,9 @@ You can disable X11 support with -Denable-x11=false.''')
         link_with: libxkbcommon_x11,
         include_directories: include_directories('include'),
     )
+    if meson.version().version_compare('>= 0.54.0')
+        meson.override_dependency('xkbcommon-x11', dep_libxkbcommon_x11)
+    endif
     pkgconfig.generate(
         libxkbcommon_x11,
         name: 'xkbcommon-x11',
@@ -362,7 +368,7 @@ if get_option('enable-xkbregistry')
     libxkbregistry_link_args = []
     libxkbregistry_link_deps = []
     if have_version_script
-        libxkbregistry_link_args += '-Wl,--version-script=' + meson.source_root()/'xkbregistry.map'
+        libxkbregistry_link_args += '-Wl,--version-script=' + meson.current_source_dir()/'xkbregistry.map'
         libxkbregistry_link_deps += 'xkbregistry.map'
     elif cc.get_argument_syntax() == 'msvc'
         libxkbregistry_def = custom_target('xkbregistry.def',
@@ -401,28 +407,53 @@ if get_option('enable-xkbregistry')
         link_with: libxkbregistry,
         include_directories: include_directories('include'),
     )
+    if meson.version().version_compare('>= 0.54.0')
+        meson.override_dependency('xkbregistry', dep_libxkbregistry)
+    endif
 endif
 
 man_pages = []
 
 # Tools
-build_tools = have_getopt_long
+build_tools = get_option('enable-tools') and cc.has_header_symbol('getopt.h', 'getopt_long', prefix: '#define _GNU_SOURCE')
 if build_tools
-    libxkbcommon_tools_internal = static_library(
-        'tools-internal',
+    # Common resources
+    libxkbcommon_tools_internal_sources = [
         'tools/tools-common.h',
         'tools/tools-common.c',
+    ]
+    libxkbcommon_tools_internal = static_library(
+        'tools-internal',
+        libxkbcommon_tools_internal_sources,
         dependencies: dep_libxkbcommon,
     )
     tools_dep = declare_dependency(
         include_directories: [include_directories('tools', 'include')],
         link_with: libxkbcommon_tools_internal,
+        dependencies: dep_libxkbcommon,
     )
 
+    # Tool: xkbcli
     executable('xkbcli', 'tools/xkbcli.c',
                dependencies: tools_dep, install: true)
     install_man('tools/xkbcli.1')
 
+    if get_option('enable-bash-completion')
+        bash_completion_path = get_option('bash-completion-path')
+        if bash_completion_path == ''
+            bash_completion = dependency('bash-completion', required: false)
+            if bash_completion.found()
+                bash_completion_path = bash_completion.get_variable(pkgconfig: 'completionsdir')
+            else
+                bash_completion_path = get_option('datadir') / 'bash-completion/completions'
+            endif
+        endif
+        install_data('tools/xkbcli-bash-completion.sh',
+                     rename: 'xkbcli',
+                     install_dir: bash_completion_path)
+    endif
+
+    # Tool: compile-keymap
     xkbcli_compile_keymap = executable('xkbcli-compile-keymap',
                                        'tools/compile-keymap.c',
                                        dependencies: tools_dep,
@@ -437,12 +468,16 @@ if build_tools
                c_args: ['-DENABLE_PRIVATE_APIS'],
                include_directories: [include_directories('src', 'include')],
                install: false)
+
+    # Tool: compose
     executable('compose',
                'tools/compose.c',
                dependencies: tools_dep,
                include_directories: [include_directories('src', 'include')],
                install: false)
     configh_data.set10('HAVE_XKBCLI_COMPILE_KEYMAP', true)
+
+    # Tool: how-to-type
     executable('xkbcli-how-to-type',
                'tools/how-to-type.c',
                dependencies: tools_dep,
@@ -450,6 +485,8 @@ if build_tools
                install_dir: dir_libexec)
     install_man('tools/xkbcli-how-to-type.1')
     configh_data.set10('HAVE_XKBCLI_HOW_TO_TYPE', true)
+
+    # Tool: interactive-evdev
     if cc.has_header('linux/input.h')
         executable('xkbcli-interactive-evdev',
                    'tools/interactive-evdev.c',
@@ -458,7 +495,18 @@ if build_tools
                    install_dir: dir_libexec)
         configh_data.set10('HAVE_XKBCLI_INTERACTIVE_EVDEV', true)
         install_man('tools/xkbcli-interactive-evdev.1')
+        # The same tool again, but with access to some private APIs.
+        executable('interactive-evdev',
+                'tools/interactive-evdev.c',
+                libxkbcommon_sources,
+                libxkbcommon_tools_internal_sources,
+                dependencies: [tools_dep],
+                c_args: ['-DENABLE_PRIVATE_APIS'],
+                include_directories: [include_directories('src', 'include')],
+                install: false)
     endif
+
+    # Tool: interactive-x11
     if get_option('enable-x11')
         x11_tools_dep = declare_dependency(
             link_with: libxkbcommon_x11,
@@ -476,6 +524,8 @@ if build_tools
         install_man('tools/xkbcli-interactive-x11.1')
         configh_data.set10('HAVE_XKBCLI_INTERACTIVE_X11', true)
     endif
+
+    # Tool: interactive-wayland
     if get_option('enable-wayland')
         wayland_client_dep = dependency('wayland-client', version: '>=1.2.0', required: false)
         wayland_protocols_dep = dependency('wayland-protocols', version: '>=1.12', required: false)
@@ -485,18 +535,18 @@ if build_tools
 You can disable the Wayland xkbcli programs with -Denable-wayland=false.''')
         endif
 
-        wayland_scanner = find_program(wayland_scanner_dep.get_pkgconfig_variable('wayland_scanner'))
+        wayland_scanner = find_program(wayland_scanner_dep.get_variable(pkgconfig: 'wayland_scanner'))
         wayland_scanner_code_gen = generator(
             wayland_scanner,
             output: '@BASENAME@-protocol.c',
-            arguments: ['code', '@INPUT@', '@OUTPUT@'],
+            arguments: ['private-code', '@INPUT@', '@OUTPUT@'],
         )
         wayland_scanner_client_header_gen = generator(
             wayland_scanner,
             output: '@BASENAME@-client-protocol.h',
             arguments: ['client-header', '@INPUT@', '@OUTPUT@'],
         )
-        wayland_protocols_datadir = wayland_protocols_dep.get_pkgconfig_variable('pkgdatadir')
+        wayland_protocols_datadir = wayland_protocols_dep.get_variable(pkgconfig: 'pkgdatadir')
         xdg_shell_xml = wayland_protocols_datadir/'stable/xdg-shell/xdg-shell.xml'
         xdg_shell_sources = [
             wayland_scanner_code_gen.process(xdg_shell_xml),
@@ -512,6 +562,7 @@ You can disable the Wayland xkbcli programs with -Denable-wayland=false.''')
         configh_data.set10('HAVE_XKBCLI_INTERACTIVE_WAYLAND', true)
     endif
 
+    # Tool: list
     if get_option('enable-xkbregistry')
         configh_data.set10('HAVE_XKBCLI_LIST', true)
         executable('xkbcli-list',
@@ -521,12 +572,22 @@ You can disable the Wayland xkbcli programs with -Denable-wayland=false.''')
                    install_dir: dir_libexec)
         install_man('tools/xkbcli-list.1')
     endif
+
+    # Tool: check-messages
+    executable('xkb-check-messages',
+               'tools/check-messages.c',
+               'tools/messages.c',
+               'tools/messages.h',
+               'src/messages-codes.h',
+               dependencies: [tools_dep],
+               include_directories: [include_directories('src', 'include', 'tools')],
+               install: false)
 endif
 
 
 # xkeyboard-config "verifier"
 xkct_config = configuration_data()
-xkct_config.set('MESON_BUILD_ROOT', meson.build_root())
+xkct_config.set('MESON_BUILD_ROOT', meson.current_build_dir())
 xkct_config.set('XKB_CONFIG_ROOT', XKBCONFIGROOT)
 configure_file(input: 'test/xkeyboard-config-test.py.in',
                output: 'xkeyboard-config-test',
@@ -536,15 +597,15 @@ configure_file(input: 'test/xkeyboard-config-test.py.in',
 test_env = environment()
 test_env.set('XKB_LOG_LEVEL', 'debug')
 test_env.set('XKB_LOG_VERBOSITY', '10')
-test_env.set('top_srcdir', meson.source_root())
-test_env.set('top_builddir', meson.build_root())
+test_env.set('top_srcdir', meson.current_source_dir())
+test_env.set('top_builddir', meson.current_build_dir())
 test_env.set('HAVE_XKBCLI_INTERACTIVE_EVDEV', configh_data.get('HAVE_XKBCLI_INTERACTIVE_EVDEV', 0).to_string())
 test_env.set('HAVE_XKBCLI_INTERACTIVE_WAYLAND', configh_data.get('HAVE_XKBCLI_INTERACTIVE_WAYLAND', 0).to_string())
 test_env.set('HAVE_XKBCLI_INTERACTIVE_X11', configh_data.get('HAVE_XKBCLI_INTERACTIVE_X11', 0).to_string())
 test_env.set('HAVE_XKBCLI_LIST', configh_data.get('HAVE_XKBCLI_LIST', 0).to_string())
 
 test_configh_data = configuration_data()
-test_configh_data.set_quoted('TEST_XKB_CONFIG_ROOT', meson.source_root()/'test'/'data')
+test_configh_data.set_quoted('TEST_XKB_CONFIG_ROOT', meson.current_source_dir()/'test'/'data')
 configure_file(output: 'test-config.h', configuration: test_configh_data)
 
 # Some tests need to use unexported symbols, so we link them against
@@ -564,9 +625,11 @@ test_dep = declare_dependency(
     link_with: libxkbcommon_test_internal,
 )
 if get_option('enable-x11')
-    libxkbcommon_x11_internal = static_library(
+    libxkbcommon_x11_test_internal = static_library(
         'xkbcommon-x11-internal',
         libxkbcommon_x11_sources,
+        'test/xvfb-wrapper.c',
+        'test/xvfb-wrapper.h',
         include_directories: include_directories('src', 'include'),
         link_with: libxkbcommon_test_internal,
         dependencies: [
@@ -575,7 +638,7 @@ if get_option('enable-x11')
         ],
     )
     x11_test_dep = declare_dependency(
-        link_with: libxkbcommon_x11_internal,
+        link_with: libxkbcommon_x11_test_internal,
         dependencies: [
             test_dep,
             xcb_dep,
@@ -598,14 +661,11 @@ test(
     executable('test-filecomp', 'test/filecomp.c', dependencies: test_dep),
     env: test_env,
 )
-# TODO: This test currently uses some functions that don't exist on Windows.
-if cc.get_id() != 'msvc'
-  test(
-      'context',
-      executable('test-context', 'test/context.c', dependencies: test_dep),
-      env: test_env,
-  )
-endif
+test(
+    'context',
+    executable('test-context', 'test/context.c', dependencies: test_dep),
+    env: test_env,
+)
 test(
     'rules-file',
     executable('test-rules-file', 'test/rules-file.c', dependencies: test_dep),
@@ -672,22 +732,40 @@ test(
     env: test_env,
     suite: ['python-tests'],
 )
+test(
+    'modifiers',
+    executable('test-modifiers', 'test/modifiers.c', dependencies: test_dep),
+    env: test_env,
+)
+test(
+    'messages',
+    executable(
+        'test-messages',
+        'test/messages.c',
+        'tools/messages.c',
+        'tools/messages.h',
+        include_directories: include_directories('src', 'include', 'tools'),
+        dependencies: test_dep),
+    env: test_env,
+)
 if get_option('enable-x11')
     test(
         'x11',
         executable('test-x11', 'test/x11.c', dependencies: x11_test_dep),
         env: test_env,
     )
-    # test/x11comp is meant to be run, but it is (temporarily?) disabled.
-    # See: https://github.com/xkbcommon/libxkbcommon/issues/30
-    executable('test-x11comp', 'test/x11comp.c', dependencies: x11_test_dep)
+    test(
+        'x11comp',
+        executable('test-x11comp', 'test/x11comp.c', dependencies: x11_test_dep),
+        env: test_env,
+    )
 endif
 if get_option('enable-xkbregistry')
     test(
         'registry',
         executable('test-registry', 'test/registry.c',
                    include_directories: include_directories('src'),
-                   dependencies: dep_libxkbregistry),
+                   dependencies: [dep_libxkbregistry, test_dep]),
         env: test_env,
     )
 endif
@@ -704,7 +782,7 @@ if build_tools
     ]
 
     env = environment()
-    env.set('XKB_CONFIG_ROOT', meson.source_root()/'test'/'data')
+    env.set('XKB_CONFIG_ROOT', meson.current_source_dir()/'test'/'data')
     foreach keysym: keysyms_to_test
         test('keysym-test-@0@'.format(keysym),
              find_program('test/test-keysym.py'),
@@ -735,7 +813,7 @@ executable('fuzz-compose', 'fuzz/compose/target.c', dependencies: test_dep)
 
 # Benchmarks.
 bench_env = environment()
-bench_env.set('top_srcdir', meson.source_root())
+bench_env.set('top_srcdir', meson.current_source_dir())
 benchmark(
     'key-proc',
     executable('bench-key-proc', 'bench/key-proc.c', dependencies: test_dep),
@@ -754,6 +832,11 @@ benchmark(
 benchmark(
     'compose',
     executable('bench-compose', 'bench/compose.c', dependencies: test_dep),
+    env: bench_env,
+)
+benchmark(
+    'compose-traversal',
+    executable('bench-compose-traversal', 'bench/compose-traversal.c', dependencies: test_dep),
     env: bench_env,
 )
 benchmark(
@@ -781,23 +864,27 @@ You can disable the documentation with -Denable-docs=false.''')
 
     doxygen_input = [
         'README.md',
+        'doc/diagrams/xkb-configuration.dot',
         'doc/doxygen-extra.css',
+        'doc/introduction-to-xkb.md',
         'doc/quick-guide.md',
-        'doc/compat.md',
+        'doc/compatibility.md',
         'doc/user-configuration.md',
         'doc/rules-format.md',
         'doc/keymap-format-text-v1.md',
+        'doc/message-registry.md',
         'include/xkbcommon/xkbcommon.h',
+        'include/xkbcommon/xkbcommon-compose.h',
+        'include/xkbcommon/xkbcommon-keysyms.h',
         'include/xkbcommon/xkbcommon-names.h',
         'include/xkbcommon/xkbcommon-x11.h',
-        'include/xkbcommon/xkbcommon-compose.h',
         'include/xkbcommon/xkbregistry.h',
     ]
     doxygen_data = configuration_data()
     doxygen_data.set('PACKAGE_NAME', meson.project_name())
     doxygen_data.set('PACKAGE_VERSION', meson.project_version())
     doxygen_data.set('INPUT', ' '.join(doxygen_input))
-    doxygen_data.set('OUTPUT_DIRECTORY', meson.build_root())
+    doxygen_data.set('OUTPUT_DIRECTORY', meson.current_build_dir())
     doxyfile = configure_file(
         input: 'doc/Doxyfile.in',
         output: 'Doxyfile',
@@ -805,15 +892,36 @@ You can disable the documentation with -Denable-docs=false.''')
     )
     # TODO: Meson should provide this.
     docdir = get_option('datadir')/'doc'/meson.project_name()
-    custom_target(
+    doc_gen = custom_target(
         'doc',
         input: [doxyfile] + doxygen_input,
         output: 'html',
-        command: [doxygen_wrapper, doxygen.path(), meson.build_root()/'Doxyfile', meson.source_root()],
+        command: [
+            doxygen_wrapper,
+            doxygen,
+            meson.current_build_dir()/'Doxyfile',
+            meson.current_source_dir(),
+        ],
         install: true,
         install_dir: docdir,
         build_by_default: true,
     )
+    if get_option('enable-cool-uris')
+        ensure_stable_urls = find_program('scripts'/'ensure-stable-doc-urls.py')
+        custom_target(
+            'doc-cool-uris',
+            input: [doc_gen, 'doc'/'cool-uris.yaml'],
+            output: 'html-xtra',
+            command: [
+                ensure_stable_urls,
+                'generate-redirections',
+                meson.current_source_dir()/'doc'/'cool-uris.yaml',
+                meson.current_build_dir()/'html'
+            ],
+            install: false,
+            build_by_default: true,
+        )
+    endif
 endif
 
 configure_file(output: 'config.h', configuration: configh_data)
@@ -827,4 +935,36 @@ if get_option('enable-x11')
 endif
 if get_option('enable-xkbregistry')
   libxkbregistry_dep = dep_libxkbregistry
+endif
+
+if meson.version().version_compare('>=0.62.0')
+    summary({
+      'backend': meson.backend(),
+      'buildtype': get_option('buildtype'),
+      'c_args': get_option('c_args'),
+      'c_link_args': get_option('c_link_args'),
+      'yacc': yacc.full_path() + ' ' + yacc.version(),
+    }, section: 'Compiler')
+    summary({
+      'prefix': get_option('prefix'),
+      'bindir': get_option('bindir'),
+      'libdir': get_option('libdir'),
+      'datadir': get_option('datadir'),
+      'xkb-config-root': XKBCONFIGROOT,
+      'xkb-config-extra-path': XKBCONFIGEXTRAPATH,
+      'xlocaledir': XLOCALEDIR,
+    }, section: 'Directories')
+    summary({
+      'docs': get_option('enable-docs'),
+      'tools': get_option('enable-tools'),
+      'wayland': get_option('enable-wayland'),
+      'x11': get_option('enable-x11'),
+    }, section: 'Features')
+    summary({
+      'layout': get_option('default-layout'),
+      'model': get_option('default-model'),
+      'options': get_option('default-options'),
+      'rules': get_option('default-rules'),
+      'variant': get_option('default-variant'),
+    }, section: 'Defaults')
 endif

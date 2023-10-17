@@ -37,6 +37,7 @@
 #include "xkbcomp/ast-build.h"
 #include "xkbcomp/parser-priv.h"
 #include "scanner-utils.h"
+#include "keysym.h"
 
 struct parser_param {
     struct xkb_context *ctx;
@@ -45,16 +46,16 @@ struct parser_param {
     bool more_maps;
 };
 
-#define parser_err(param, fmt, ...) \
-    scanner_err((param)->scanner, fmt, ##__VA_ARGS__)
+#define parser_err(param, error_id, fmt, ...) \
+    scanner_err_with_code((param)->scanner, error_id, fmt, ##__VA_ARGS__)
 
-#define parser_warn(param, fmt, ...) \
-    scanner_warn((param)->scanner, fmt, ##__VA_ARGS__)
+#define parser_warn(param, warning_id, fmt, ...) \
+    scanner_warn_with_code((param)->scanner, warning_id, fmt, ##__VA_ARGS__)
 
 static void
 _xkbcommon_error(struct parser_param *param, const char *msg)
 {
-    parser_err(param, "%s", msg);
+    parser_err(param, XKB_ERROR_INVALID_SYNTAX, "%s", msg);
 }
 
 static bool
@@ -84,7 +85,7 @@ resolve_keysym(const char *name, xkb_keysym_t *sym_rtrn)
 #define param_scanner param->scanner
 %}
 
-%pure-parser
+%define api.pure
 %lex-param      { struct scanner *param_scanner }
 %parse-param    { struct parser_param *param }
 
@@ -727,7 +728,12 @@ KeySyms         :       OBRACE KeySymList CBRACE
 KeySym          :       IDENT
                         {
                             if (!resolve_keysym($1, &$$)) {
-                                parser_warn(param, "unrecognized keysym \"%s\"", $1);
+                                parser_warn(
+                                    param,
+                                    XKB_WARNING_UNRECOGNIZED_KEYSYM,
+                                    "unrecognized keysym \"%s\"",
+                                    $1
+                                );
                                 $$ = XKB_KEY_NoSymbol;
                             }
                             free($1);
@@ -735,20 +741,35 @@ KeySym          :       IDENT
                 |       SECTION { $$ = XKB_KEY_section; }
                 |       Integer
                         {
-                            if ($1 < 0) {
-                                parser_warn(param, "unrecognized keysym \"%"PRId64"\"", $1);
+                            if ($1 < XKB_KEYSYM_MIN) {
+                                parser_warn(
+                                    param,
+                                    XKB_WARNING_UNRECOGNIZED_KEYSYM,
+                                    "unrecognized keysym \"%"PRId64"\"",
+                                    $1
+                                );
                                 $$ = XKB_KEY_NoSymbol;
                             }
+                            /* Special case for digits 0..9 */
                             else if ($1 < 10) {      /* XKB_KEY_0 .. XKB_KEY_9 */
                                 $$ = XKB_KEY_0 + (xkb_keysym_t) $1;
                             }
                             else {
-                                char buf[32];
-                                snprintf(buf, sizeof(buf), "0x%"PRIx64, $1);
-                                if (!resolve_keysym(buf, &$$)) {
-                                    parser_warn(param, "unrecognized keysym \"%s\"", buf);
+                                if ($1 <= XKB_KEYSYM_MAX) {
+                                    $$ = (xkb_keysym_t) $1;
+                                } else {
+                                    parser_warn(
+                                        param, XKB_WARNING_UNRECOGNIZED_KEYSYM,
+                                        "unrecognized keysym \"0x%"PRIx64"\" "
+                                        "(%"PRId64")", $1, $1
+                                    );
                                     $$ = XKB_KEY_NoSymbol;
                                 }
+                                parser_warn(
+                                    param, XKB_WARNING_NUMERIC_KEYSYM,
+                                    "numeric keysym \"0x%"PRIx64"\" (%"PRId64")",
+                                    $1, $1
+                                );
                             }
                         }
                 ;
@@ -835,6 +856,7 @@ parse(struct xkb_context *ctx, struct scanner *scanner, const char *map)
 
     if (first)
         log_vrb(ctx, 5,
+                XKB_WARNING_MISSING_DEFAULT_SECTION,
                 "No map in include statement, but \"%s\" contains several; "
                 "Using first defined map, \"%s\"\n",
                 scanner->file_name, first->name);
