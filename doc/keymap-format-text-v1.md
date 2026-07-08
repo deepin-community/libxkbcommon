@@ -9,17 +9,20 @@ NOTE:
   syntax highlighting.
 -->
 
-This document describes the `XKB_KEYMAP_FORMAT_TEXT_V1` keymap format,
+This document describes the `XKB_KEYMAP_FORMAT_TEXT_V1` [keymap] format,
 as implemented by libxkbcommon.
 
-The standard database of keyboard configuration data is
-[xkeyboard-config].
+@see For an overview of the role of this format, please see “@ref xkb-the-config ""”.
+
+@see For examples of keymaps in this format, please see “@ref user-configuration ""”.
+For further examples see [xkeyboard-config], the standard database of keyboard
+configuration data.
 
 @note Due to the complexity of the format, this document is still is construction.
 Some additional resources are:
 
 @note
-- [Ivan Pascal's XKB documentation][ivan-pascal]
+- [Ivan Pascal’s XKB documentation][ivan-pascal]
 - [An Unreliable Guide to XKB Configuration][unreliable-guide]
 - [The X Keyboard Extension: Protocol Specification][XKB Protocol]
 - [How to enhance XKB configuration][xkeyboard-config doc]
@@ -205,7 +208,7 @@ Some additional resources are:
   of each entry is called a <a name="level-index-def">shift level</a>
   or simply level. By convention the lowest level is the result when
   no modifier is active.
-  Example for the key `A` on latin script keyboard:
+  Example for the key `A` on a latin script keyboard:
 
   | Level | Description                    | Keysym | Active key modifiers |
   |-------|--------------------------------|--------|----------------------|
@@ -233,10 +236,10 @@ Some additional resources are:
   how to derive the active level from the modifiers states. Examples:
   - `ONE_LEVEL`: the key has only one level, i.e. it is not affected
     by any modifiers. Example: the modifiers themselves.
-  - `TWO_LEVEL`: the key has two levels:
+  - [`TWO_LEVEL`][TWO_LEVEL]: the key has two levels:
     - Level 1: default level, active when the `Shift` modifier is _not_ active.
     - Level 2: level activated with the `Shift` modifier.
-  - `FOUR_LEVEL`: see the example in the previous section.
+  - [`FOUR_LEVEL`][FOUR_LEVEL]: see the example in the previous section.
 
   See [xkb_types] for further details.
   </dd>
@@ -309,7 +312,19 @@ Some additional resources are:
   mapping of raw keycodes to symbols and actions.
   It fully defines the behavior of a keyboard.
 
-  See [xkb_keymap] for further details.
+  Depending of the context, a keymap may refer to:
+
+  - the software object defined and managed by libxkbcommon;
+  - the text configuration used to create this software object.
+
+  See @ref keymap-components-intro and [xkb_keymap] for further details.
+  </dd>
+  <dt>Keyboard configuration database @anchor database-def</dt>
+  <dd>
+    A database that provides the [keymap components](@ref keymap-components-intro).
+    \*nix OSs uses the _standard_ database [xkeyboard-config]. One may extend
+    this database with _custom_ layouts: see “@ref user-configuration ""” for
+    further details.
   </dd>
 </dl>
 
@@ -331,33 +346,184 @@ Some additional resources are:
 [action]: @ref key-action-def
 [indicator]: @ref indicator-def
 [keymap]: @ref keymap-def
+[database]: @ref database-def
 [ISO9995]: https://en.wikipedia.org/wiki/ISO/IEC_9995
 
 
 ## Introduction to the XKB text format {#introduction}
 
 The XKB text format uses a syntax similar to the [C programming language][C].
+Note that the similarity with C stops here: the XKB text format is only a
+_configuration_ format and is not intended for programming.
 
-@todo general comment on syntax: section, values, etc.
+The XKB text format is used to configure a _keyboard keymap_, which is
+introduced in “@ref xkb-the-config ""”. It has the following two main use cases,
+illustrated in the [diagram hereinafter](@ref xkb-keymap-components-diagram):
 
-@todo the import mechanism
+- __Server:__ Load a keymap from the keymap configuration database, then handle
+  input events by updating the keyboard state. The keymap is assembled from
+  an [RMLVO configuration][RMLVO] and its corresponding
+  <strong>[KcCGST components][KcCGST]</strong> files.
 
-@todo recommended ways to feed xkbcommon
+  @see xkb_keymap::xkb_keymap_new_from_names
+
+  @see [xkeyboard-config] for the implementation of the *standard* keymap
+  configuration database.
+
+  @see “@ref user-configuration ""” to add a *custom* layout or option.
+- __Client:__ Load the active keymap from the server, then handle update events
+  sent by the server. The <strong>[complete keymap]</strong> is directly
+  available in a _self-contained_ file.
+
+  @see xkb_keymap::xkb_keymap_new_from_string
+
+@anchor xkb-keymap-components-diagram
+@dotfile xkb-keymap-components "XKB text format use cases"
 
 [C]: https://en.wikipedia.org/wiki/C_(programming_language)#Syntax
+[RMLVO]: @ref RMLVO-intro
+[KcCGST]: @ref KcCGST-intro
+[complete keymap]: @ref keymap-intro
 
-### Keywords
+### XKB file
 
-@todo keywords, other settings such as “SetMods”
+There are two kinds of files for the XKB text format:
 
-<!--
-TODO: SetMods is not a keyword, but how call it for using-facing doc?
-
-There are many keywords
-
-The key words are _case-insensitive_, e.g. the following strings denote
-the same key word: `SETMODS`, `SetMods`, `setMods` and `setmods`.
+<!-- NOTE:
+The XKB protocol (https://www.x.org/releases/current/doc/kbproto/xkbproto.html)
+uses “Keyboard description” and “Keyboard components” rather than “keymap” and
+“keymap components”.
 -->
+
+<dl>
+  <dt>Keymap file @anchor keymap-file-def</dt>
+  <dd>
+    A file with the _complete_ description of the [keymap] object.
+    It is the kind of file that the server sends to the client (see
+    the [diagram](@ref xkb-keymap-components-diagram) above).
+    Its top-level structure consists of the [xkb_keymap] block.
+  </dd>
+  <!-- TODO: not sure of the following -->
+  <!--
+  <dt>Partial keymap</dt>
+  <dd>
+  A keymap text configuration with one or more keymap sections. Some
+  sections may be missing and [include] statements may not be resolved.
+  </dd>
+  <dt>Complete keymap</dt>
+  <dd>
+  A keymap text configuration consisting of a `%xkb_keymap` block with all
+  mandatory sections; all [include] statements are resolved so that it is
+  self-contained.
+
+  See the [xkb_keymap] block for further details.
+  </dd>
+  -->
+  <dt>Keymap _component_ file @anchor keymap-component-file-def</dt>
+  <dd>
+    A file with the description of a _particular_ [KcCGST component][KcCGST].
+    It is the kind of file that the server uses to assemble a [keymap file].
+    Its top-level structure consists of a _single type_ of [keymap sections].
+    A component file may contain multiple such sections.
+  </dd>
+</dl>
+
+[keymap file]: @ref keymap-file-def
+[keymap component file]: @ref keymap-component-file-def
+[keymap sections]: @ref keymap-section-def
+[section]: @ref keymap-section-def
+[keymap components]: @ref keymap-component-def
+
+### Keymap components {#keymap-components-intro}
+
+[Keymap components][keymap components] are described with [keymap sections].
+They are grouped in [keymap component files][keymap component file] to form a
+[keyboard configuration database][database].
+
+<dl>
+  <dt>Keymap _component_ @anchor keymap-component-def</dt>
+  <dd>
+  A part of the keymap _object_. The set of keymap components is referred as
+  [KcCGST]. They are presented in the [table hereinafter][keymap components table].
+  </dd>
+  <dt>Keymap _section_ @anchor keymap-section-def</dt>
+  <dd>
+  A part of the keymap _text configuration_ dedicated to one of the
+  [keymap components][keymap components table].
+  </dd>
+  <dt>Component _folder_</dt>
+  <dd>
+  A folder in the [keymap configuration database][database], dedicated to files
+  with partial definitions of the same keymap section.
+  </dd>
+</dl>
+
+[keymap components table]: @ref keymap-components-table
+
+@anchor keymap-components-table
+<table>
+  <caption>
+    Keymap components
+  </caption>
+  <tr>
+    <th>[Component](@ref keymap-component-def)</th>
+    <th>[Section][section] in a [keymap][xkb_keymap]</th>
+    <th>Folder in a keymap configuration database</th>
+    <th>Description</th>
+  </tr>
+  <tr>
+    <th><u>K</u>ey <u>c</u>odes</th>
+    <td>[xkb_keycodes]</td>
+    <td>`keycodes`</td>
+    <td>
+    A translation of the raw [key codes][keycode] from the keyboard into
+    symbolic names.
+    </td>
+  </tr>
+  <tr>
+    <th><u>C</u>ompatibility</th>
+    <td>[xkb_compat]</td>
+    <td>`compat`</td>
+    <td>
+    A specification of what internal actions modifiers and various
+    special-purpose keys produce.
+    </td>
+  </tr>
+  <tr>
+    <th>(<u>G</u>eometry)</th>
+    <td>xkb_geometry</td>
+    <td>`geometry`</td>
+    <td>
+    A description of the physical layout of a keyboard.
+
+    @attention This legacy feature is [not supported](@ref geometry-support)
+    by _xkbcommon_.
+
+    </td>
+  </tr>
+  <tr>
+    <th>Key <u>s</u>ymbols</th>
+    <td>[xkb_symbols]</td>
+    <td>`symbols`</td>
+    <td>
+    A translation of symbolic [key codes][keycode] into actual [key symbols][keysyms]
+    (keysyms).
+    </td>
+  </tr>
+  <tr>
+    <th>Key <u>t</u>ypes</th>
+    <td>[xkb_types]</td>
+    <td>`types`</td>
+    <td>
+    Types describe how a pressed key is affected by active [modifiers]
+    such as Shift, Control, Alt, etc.
+    </td>
+  </tr>
+</table>
+
+### Comments
+
+Comments are introduced following either `//` or `#` until the end of the line.
 
 ### Literals
 
@@ -395,10 +561,82 @@ the same key word: `SETMODS`, `SetMods`, `setMods` and `setmods`.
   </dd>
 </dl>
 
+### Keywords
+
+The following table presents the keywords used in the format. They are
+_case-sensitive_.
+
+<!-- NOTE: keywords are defined in `src/xkbcomp/keywords.gperf` -->
+
+| Keyword                 | Use                            |
+| ----------------------- | ------------------------------ |
+| `action`                | <span class="todo">TODO</span> |
+| `alias`                 | <span class="todo">TODO</span> |
+| `alphanumeric_keys`     | <span class="todo">TODO</span> |
+| `alternate_group`       | <span class="todo">TODO</span> |
+| `alternate`             | <span class="todo">TODO</span> |
+| `augment`               | Mode qualifier for [include] statements |
+| `default`               | <span class="todo">TODO</span> |
+| `function_keys`         | <span class="todo">TODO</span> |
+| `group`                 | <span class="todo">TODO</span> |
+| `hidden`                | <span class="todo">TODO</span> |
+| `include`               | [Include statement][include]              |
+| `indicator`             | <span class="todo">TODO</span> |
+| `interpret`             | <span class="todo">TODO</span> |
+| `key`                   | <span class="todo">TODO</span> |
+| `keypad_keys`           | <span class="todo">TODO</span> |
+| `keys`                  | <span class="todo">TODO</span> |
+| `logo`                  | <span class="todo">TODO</span> |
+| `mod_map`               | Alias of `modifier_map`                   |
+| `modifier_keys`         | <span class="todo">TODO</span> |
+| `modmap`                | Alias of `modifier_map` |
+| `modifier_map`          | <span class="todo">TODO</span> |
+| `outline`               | <span class="todo">TODO</span> |
+| `overlay`               | <span class="todo">TODO</span> |
+| `override`              | Mode qualifier for [include] statements |
+| `partial`               | <span class="todo">TODO</span> |
+| `replace`               | Mode qualifier for [include] statements |
+| `row`                   | <span class="todo">TODO</span> |
+| `section`               | <span class="todo">TODO</span> |
+| `shape`                 | <span class="todo">TODO</span> |
+| `solid`                 | <span class="todo">TODO</span> |
+| `text`                  | <span class="todo">TODO</span> |
+| `type`                  | <span class="todo">TODO</span> |
+| `virtual_modifiers`     | <span class="todo">TODO</span> |
+| `virtual`               | <span class="todo">TODO</span> |
+| `xkb_compat_map`        | Alias of `xkb_compatibility_map` |
+| `xkb_compat`            | Alias of `xkb_compatibility_map` |
+| `xkb_compatibility_map` | Declare a [compatibility section][xkb_compat] |
+| `xkb_compatibility`     | Alias of `xkb_compatibility_map` |
+| `xkb_geometry`          | Declare a geometry section (<span class="todo">TODO: legacy</span>) |
+| `xkb_keycodes`          | Declare a [keycodes section][xkb_keycodes] |
+| `xkb_keymap`            | Declare a [keymap block][xkb_keymap] |
+| `xkb_layout`            | <span class="todo">TODO</span> |
+| `xkb_semantics`         | <span class="todo">TODO</span> |
+| `xkb_symbols`           | Declare a [symbols section][xkb_symbols]   |
+| `xkb_types`             | Declare a [key types section ][xkb_types]  |
+
+[include]: @ref xkb-include
+
+### Built-in settings
+
+<!--
+TODO: SetMods is not a keyword, but how call it for user-facing doc?
+-->
+
+There are many built-in settings; they are explained in the following relevant
+sections.
+
+These settings are _case-insensitive_, e.g. the following strings denote
+the same key word: `SETMODS`, `SetMods`, `setMods` and `setmods`.
+
+### The include mechanism {#xkb-include}
+
+@todo the import mechanism, its qualifiers
 
 ## The “xkb_keymap” block {#the-xkb_keymap-block}
 
-A <strong>[keymap]</strong> consists of a single top-level `xkb_keymap`
+A <strong>[keymap file]</strong> consists of a single top-level `xkb_keymap`
 block, under which are nested the following sections:
 
 <dl>
@@ -441,11 +679,18 @@ xkb_keymap {
 };
 ```
 
+<!-- TODO: there might be several sections of the same type: explain syntax and how they are selected -->
+<!-- TODO: sections may be named -->
+<!-- TODO: introduce tags → only “default” MAP_IS_DEFAULT seems to be used; other are just documentation -->
+<!-- TODO: `xkb_semantics`, `xkb_layout`: they seem to be aliases of `xkb_keymap`
+           in xkbcommon, but they have subtle differences in original `xkbcomp`. -->
+<!-- TODO: See: [xkbcomp] xkbcomp/keymap.c CompileKeymap (XkmSemanticsFile, XkmLayoutFile) -->
+
 ## The “xkb_keycodes” section {#the-xkb_keycodes-section}
 
-This is the simplest section type, and is the first one to be
+This is the simplest [section] type, and is the first one to be
 compiled. The purpose of this is mostly to map between the
-hardware/evdev scancodes and XKB [keycodes]. Each key is given a name
+hardware/evdev scancodes and XKB [keycodes][keycode]. Each key is given a name
 by which it can be referred to later, e.g. in the symbols section.
 
 ### Keycode statements
@@ -492,14 +737,14 @@ In the common case this just maps to the evdev scancodes from
     #define KEY_1                2
 
 correspond to the ones above. Similar definitions appear in the
-xf86-input-keyboard driver. Note that in all current keymaps there's a
+xf86-input-keyboard driver. Note that in all current keymaps there’s a
 constant offset of 8 (for historical reasons).
 
 Note that contrary to xkbcommon, the X11 protocol supports keycodes
 only up to `255`. Therefore, when interfacing with X11, keymaps and applications
 using keycodes beyond `255` should expect warnings.
 
-If there's a conflict, like the same name given to different keycodes,
+If there’s a conflict, like the same name given to different keycodes,
 or same keycode given different names, it is resolved according to the
 merge mode which applies to the definitions.
 
@@ -530,26 +775,61 @@ section and by the user.
 
 ## The “xkb_types” section {#the-xkb_types-section}
 
-This section is the second to be processed, after `xkb_keycodes`.
+<!--
+Ivan Pascal’s doc:
+https://web.archive.org/web/20190724070654/http://pascal.tsu.ru/en/xkb/gram-types.html
+-->
+
+This [section] is the second to be processed, after `xkb_keycodes`.
 However, it is completely independent and could have been the first to
 be processed (it does not refer to specific keys as specified in the
 `xkb_keycodes` section).
 
 This section defines [key types], which, given a key and a keyboard
 state (i.e. modifier state and group), determine the [shift level] to
-be used in translating the key to [keysyms]. These types are assigned to
-each group in each key, in the `xkb_symbols` section.
+be used in translating the key to [keysyms]. These types are assigned
+to each group in each key, in the `xkb_symbols` section.
 
 Key types are called this way because, in a way, they really describe
-the "type" of the key (or more correctly, a specific group of the
+the “type” of the key (or more correctly, a specific group of the
 key). For example, an ordinary keymap will provide a type called
 `KEYPAD`, which consists of two levels, with the second level being
 chosen according to the state of the Num Lock (or Shift) modifiers.
 Another example is a type called `ONE_LEVEL`, which is usually
 assigned to keys such as Escape; these have just one level and are not
 affected by the modifier state. Yet more common examples are
-`TWO_LEVEL` (with Shift choosing the second level), `ALPHABETIC`
-(where Caps Lock may also choose the second level), etc.
+[`TWO_LEVEL`][TWO_LEVEL] (with Shift choosing the second level),
+[`ALPHABETIC`][ALPHABETIC] (where Caps Lock may also choose the second
+level), etc.
+
+### How key types work
+
+Key types define a _mapping_ between the [modifiers] and [shift levels].
+Key types have four parameters:
+
+<dl>
+    <dt>@ref key-type-level-name "Shift level names"</dt>
+    <dd>Declare [shift levels]. Mainly for documentation.</dd>
+    <dt>@ref key-type-modifiers "Modifiers filter"</dt>
+    <dd>Declare what modifiers should be taken into account in the mapping.</dd>
+    <dt>@ref key-type-map "Modifiers mapping"</dt>
+    <dd>Lookup table to translate modifiers combinations into shift levels.</dd>
+    <dt>@ref key-type-preserve "Modifiers preservation"</dt>
+    <dd>Tweak the computation of [consumed modifiers].</dd>
+</dl>
+
+[consumed modifiers]: @ref consumed-modifiers
+[shift levels]: @ref level-def
+
+Key types are used to compute:
+- the [shift level][]: see xkb_state::xkb_state_key_get_level().
+- the [consumed modifiers][]: see xkb_state::xkb_state_key_get_consumed_mods() and
+  xkb_state::xkb_state_key_get_consumed_mods2().
+
+The following diagram presents an overview of theses computations:
+
+@anchor xkb-types-explanation-diagram
+@dotfile xkb-types-explanation "Use of key types to compute shift level and consumed modifiers"
 
 ### Type definitions
 
@@ -557,23 +837,23 @@ Statements of the form:
 
     type "FOUR_LEVEL" { ... }
 
-The above would create a new type named `FOUR_LEVEL`.
+The above would create a new type named [`FOUR_LEVEL`][FOUR_LEVEL].
 The body of the definition may include statements of the following
 forms:
 
-#### “level_name” statements
+#### “level_name” statements {#key-type-level-name}
 
     level_name[Level1] = "Base";
 
 Mandatory for each level in the type.
 
-Gives each level in this type a descriptive name. It isn't used
+Gives each level in this type a descriptive name. It isn’t used
 for anything.
 
 Note: A level may be specified as Level\[1-8\] or just a number (can
 be more than 8).
 
-#### “modifiers” statement
+#### “modifiers” statement {#key-type-modifiers}
 
     modifiers = Shift+Lock+LevelThree;
 
@@ -584,46 +864,397 @@ being considered when matching the modifier state against the type.
 The other modifiers, whether active or not, are masked out in the
 calculation.
 
-#### “map” entry statements
+#### “map” entry statements {#key-type-map}
 
     map[Shift+LevelThree] = Level4;
 
 Should have at least as many mappings as there are levels in the type.
 
-If the active modifiers, masked with the type's modifiers (as stated
+If the active modifiers, masked with the type’s modifiers (as stated
 above), match (i.e. equal) the modifiers inside the `map[]` statement,
 then the level in the right hand side is chosen. For example, in the
 above, if in the current keyboard state the `Shift` and `LevelThree`
 modifiers are active, while the `Lock` modifier is not, then the
 keysym(s) in the 4th level of the group will be returned to the user.
 
-#### “preserve” statements
+#### “preserve” statements {#key-type-preserve}
 
     map[Shift+Lock+LevelThree] = Level5;
     preserve[Shift+Lock+LevelThree] = Lock;
 
 When a key type is used for keysym translation, its modifiers are said
-to be "consumed". For example, in a simple US keymap, the "g" "g" key
-is assigned an ordinary `ALPHABETIC` key type, whose modifiers are
-Shift and Lock; then for the "g" key, these two modifiers are consumed
-by the translation. This information is relevant for applications
-which further process the modifiers, since by then the consumed
-modifiers have already "done their part" and should be masked out.
+to be [consumed](@ref consumed-modifiers) in this translation. For
+example, in a simple US keymap, the “G” key is assigned an ordinary
+[`ALPHABETIC`][ALPHABETIC] key type, whose modifiers are `Shift` and
+`Lock`; then for the “G” key, these two modifiers are consumed by the
+translation. This information is relevant for applications which
+further process the modifiers, since by then the consumed modifiers
+have already “done their part” and should be masked out.
 
 However, sometimes even if a modifier had already affected the key
 translation through the type, it should *not* be reported as consumed,
 for various reasons. In this case, a `preserve[]` statement can be
 used to augment the map entry. The modifiers inside the square
-brackets should match one of the map[] statements in the type (if
+brackets should match one of the `map[]` statements in the type (if
 there is no matching map entry, one mapping to Level1 is implicitly
 added). The right hand side should consists of modifiers from the
-type's modifiers; these modifiers are then "preserved" and not
+type’s modifiers; these modifiers are then “preserved” and not
 reported as consumed.
+
+@attention Consuming a *locked* modifier does *not* unlock it and it
+can be consumed again in further keysym translations.
+
+@note Remember that @ref keysym-transformations may affect the resulting
+keysym when some modifiers are not [consumed](@ref consumed-modifiers).
+
+@remark `preserve` statements may be used to tweak keyboard shorcuts.
+@remark@figure
+@figcaption
+Example of use of `preserve` to tweak `Control` shortcuts. Note it would
+require further work in order to support other modifiers.
+@endfigcaption
+```c
+xkb_types {
+    // ...
+    type "TWO_LEVEL_PLUS_CONTROL" {
+        modifiers = Shift + Control;
+        map[None]          = Level1;
+        map[Shift]         = Level2;
+        map[Control]       = Level3;
+        map[Control+Shift] = Level4;
+        // Using preserve will make Control not consumed and allow
+        // applications to detect keyboard shortcuts with alternative
+        // keysyms in levels 3 and 4 rather than the levels 1 and 2.
+        preserve[Control]       = Control;
+        preserve[Control+Shift] = Control;
+        level_name[Level1] = "Base";
+        level_name[Level2] = "Shift";
+        level_name[Level3] = "Tweaked Control";
+        level_name[Level4] = "Tweaked Control + Shift";
+    };
+};
+xkb_symbols {
+    // ...
+    // The following key would produce Greek keysym on Base and Shift levels,
+    // but will produce the corresponding ASCII Latin keysyms when using Control.
+    key <AC01> {
+        type[Group1]="TWO_LEVEL_PLUS_CONTROL",
+        [Greek_alpha, Greek_ALPHA, a, A]
+    };
+};
+```
+@endfigure
+
+### Key types examples {#key-type-examples}
+
+#### Definitions examples
+
+<!-- The following examples come from the [xkeyboard-config] project. -->
+
+@note The convention is that `Lock` affect only “alphabetic” types.
+For such types, `Lock` “cancels” `Shift` by default, i.e. `Shift+Lock`
+has the same result as neither modifier. “<em>semi</em>-alphabetic”
+types have an asymmetry: their first two levels are alphabetic while the
+next are not.
+
+##### Two levels
+
+The following examples compare two basic types with *two levels*:
+[`TWO_LEVEL`][TWO_LEVEL] and [`ALPHABETIC`][ALPHABETIC].
+They differ on their handling of the `Lock` modifier. See the
+[next section](@ref key-type-mappings-examples) for an illustration
+with concrete layouts.
+
+[TWO_LEVEL]:  @ref TWO_LEVEL
+[ALPHABETIC]: @ref ALPHABETIC
+
+<!-- NOTE: In the following code excerpts, the empty comments are intented
+     to enable code alignment when scrren is large enough to display two
+     example on the same row. -->
+
+<div class="example-container">
+    <div class="example">
+        <div class="example-inner">
+            <div class="example-title">`TWO_LEVEL` @anchor TWO_LEVEL</div>
+            @figure@figcaption
+            Definition code ([source][two-type-src])
+            @endfigcaption
+```c
+type "TWO_LEVEL" {
+    // Only care about Shift; Lock will be filter out
+    modifiers = Shift;
+    // Define mapping
+    map[None]  = Level1; // No modifier   -> level 1
+    map[Shift] = Level2; // Exactly Shift -> level 2
+    // (no map entry with Lock)
+    // Define level names
+    level_name[Level1] = "Base";
+    level_name[Level2] = "Shift";
+};
+```
+            @endfigcaption
+            @figure@figcaption
+            Mapping test
+            @endfigcaption
+| *Active* modifiers | *Filtered* modifiers | Match? | Shift level |
+| ------------------ | -------------------- | ------ | ----------- |
+| (none)             | (none)               | Yes    | 1           |
+| `Shift`            | `Shift`              | Yes    | 2           |
+| `Lock`             | (none)               | Yes    | 1           |
+| `Shift + Lock`     | `Shift`              | Yes    | 2           |
+            @endfigcaption
+        </div>
+    </div>
+    <div class="example">
+        <div class="example-inner">
+            <div class="example-title">`ALPHABETIC` @anchor ALPHABETIC</div>
+            @figure@figcaption
+            Definition code ([source][alphabetic-type-src])
+            @endfigcaption
+```c
+type "ALPHABETIC" {
+    // Only care about Shift and Lock
+    modifiers = Shift + Lock;
+    // Define mapping
+    map[None]  = Level1; // No modifier   -> level 1
+    map[Shift] = Level2; // Exactly Shift -> level 2
+    map[Lock]  = Level2; // Exactly Lock  -> level 2
+    // Define level names
+    level_name[Level1] = "Base";
+    level_name[Level2] = "Caps";
+};
+```
+            @endfigcaption
+            @figure@figcaption
+            Mapping test
+            @endfigcaption
+| *Active* modifiers | *Filtered* modifiers | Match? | Shift level |
+| ------------------ | -------------------- | ------ | ----------- |
+| (none)             | (none)               | Yes    | 1           |
+| `Shift`            | `Shift`              | Yes    | 2           |
+| `Lock`             | `Lock`               | Yes    | 2           |
+| `Shift + Lock`     | `Shift + Lock`       | No     | 1           |
+            @endfigcaption
+        </div>
+    </div>
+</div>
+
+##### Four levels
+
+The following examples compare basic types with *four levels*:
+[`FOUR_LEVEL`][FOUR_LEVEL],
+[`FOUR_LEVEL_SEMIALPHABETIC`][FOUR_LEVEL_SEMIALPHABETIC] and
+[`FOUR_LEVEL_ALPHABETIC`][FOUR_LEVEL_ALPHABETIC].
+They differ on their handling of the `Lock` modifier.
+See the [next section](@ref key-type-mappings-examples)
+for an illustration with concrete layouts.
+
+[FOUR_LEVEL]:                @ref FOUR_LEVEL
+[FOUR_LEVEL_SEMIALPHABETIC]: @ref FOUR_LEVEL_SEMIALPHABETIC
+[FOUR_LEVEL_ALPHABETIC]:     @ref FOUR_LEVEL_ALPHABETIC
+
+<div class="example-container">
+    <div class="example">
+        <div class="example-inner">
+            <div class="example-title">`FOUR_LEVEL` @anchor FOUR_LEVEL</div>
+            @figure@figcaption
+            Definition code ([source][four-level-src])
+            @endfigcaption
+```c
+type "FOUR_LEVEL" {
+	modifiers = Shift + LevelThree;
+	map[None] = Level1;
+	map[Shift] = Level2;
+    // (no map entry with Lock)
+    // (no map entry with Lock)
+	map[LevelThree] = Level3;
+	map[Shift+LevelThree] = Level4;
+    // (no map entry with Lock)
+    // (no map entry with Lock)
+    // (no preserve entry with Lock)
+    // (no preserve entry with Lock)
+	level_name[Level1] = "Base";
+	level_name[Level2] = "Shift";
+	level_name[Level3] = "AltGr";
+	level_name[Level4] = "Shift AltGr";
+};
+```
+            @endfigcaption
+            @figure@figcaption
+            Mapping test
+            @endfigcaption
+| *Active* modifiers      | *Filtered* modifiers | Match? | Shift level |
+| ----------------------- | -------------------- | ------ | ----------- |
+| (none)                  | (none)               | Yes    | 1           |
+| `Shift`                 | `Shift`              | Yes    | 2           |
+| `Lock`                  | (none)               | Yes    | 1           |
+| `Shift+Lock`            | `Shift`              | Yes    | 2           |
+| `LevelThree`            | `LevelThree`         | Yes    | 3           |
+| `LevelThree+Shift`      | `LevelThree+Shift`   | Yes    | 4           |
+| `LevelThree+Lock`       | `LevelThree`         | Yes    | 3           |
+| `LevelThree+Shift+Lock` | `LevelThree+Shift`   | Yes    | 4           |
+            @endfigcaption
+        </div>
+    </div>
+    <div class="example">
+        <div class="example-inner">
+            <div class="example-title">`FOUR_LEVEL_SEMIALPHABETIC` @anchor FOUR_LEVEL_SEMIALPHABETIC</div>
+            @figure@figcaption
+            Definition code ([source][four-level-semialphabetic-src])
+            @endfigcaption
+```c
+type "FOUR_LEVEL_SEMIALPHABETIC" {
+	modifiers = Shift + Lock + LevelThree;
+	map[None] = Level1;
+	map[Shift] = Level2;
+	map[Lock] = Level2;
+	map[Shift+Lock] = Level1;
+	map[LevelThree] = Level3;
+	map[Shift+LevelThree] = Level4;
+	map[Lock+LevelThree] = Level3;
+	map[Shift+Lock+LevelThree] = Level4;
+	preserve[Lock+LevelThree] = Lock;
+	preserve[Shift+Lock+LevelThree] = Lock;
+	level_name[Level1] = "Base";
+	level_name[Level2] = "Shift";
+	level_name[Level3] = "AltGr";
+	level_name[Level4] = "Shift AltGr";
+};
+```
+            @endfigcaption
+            @figure@figcaption
+            Mapping test
+            @endfigcaption
+| *Active* modifiers      | *Filtered* modifiers    | Match? | Shift level |
+| ----------------------- | ----------------------- | ------ | ----------- |
+| (none)                  | (none)                  | Yes    | 1           |
+| `Shift`                 | `Shift`                 | Yes    | 2           |
+| `Lock`                  | `Lock`                  | Yes    | 2           |
+| `Shift+Lock`            | `Shift+Lock`            | Yes    | 1           |
+| `LevelThree`            | `LevelThree`            | Yes    | 3           |
+| `LevelThree+Shift`      | `LevelThree+Shift`      | Yes    | 4           |
+| `LevelThree+Lock`       | `LevelThree+Lock`       | Yes    | 3           |
+| `LevelThree+Shift+Lock` | `LevelThree+Shift+Lock` | Yes    | 4           |
+            @endfigcaption
+        </div>
+    </div>
+    <div class="example">
+        <div class="example-inner">
+            <div class="example-title">`FOUR_LEVEL_ALPHABETIC` @anchor FOUR_LEVEL_ALPHABETIC</div>
+            @figure@figcaption
+            Definition code ([source][four-level-alphabetic-src])
+            @endfigcaption
+```c
+type "FOUR_LEVEL_ALPHABETIC" {
+	modifiers = Shift + Lock + LevelThree;
+	map[None] = Level1;
+	map[Shift] = Level2;
+	map[Lock] = Level2;
+	map[Shift+Lock] = Level1;
+	map[LevelThree] = Level3;
+	map[Shift+LevelThree] = Level4;
+	map[Lock+LevelThree] = Level4;
+	map[Shift+Lock+LevelThree] = Level3;
+    // (no preserve entry with Lock)
+    // (no preserve entry with Lock)
+	level_name[Level1] = "Base";
+	level_name[Level2] = "Shift";
+	level_name[Level3] = "AltGr";
+	level_name[Level4] = "Shift AltGr";
+};
+```
+            @endfigcaption
+            @figure@figcaption
+            Mapping test
+            @endfigcaption
+| *Active* modifiers      | *Filtered* modifiers    | Match? | Shift level |
+| ----------------------- | ----------------------- | ------ | ----------- |
+| (none)                  | (none)                  | Yes    | 1           |
+| `Shift`                 | `Shift`                 | Yes    | 2           |
+| `Lock`                  | `Lock`                  | Yes    | 2           |
+| `Shift+Lock`            | `Shift+Lock`            | Yes    | 1           |
+| `LevelThree`            | `LevelThree`            | Yes    | 3           |
+| `LevelThree+Shift`      | `LevelThree+Shift`      | Yes    | 4           |
+| `LevelThree+Lock`       | `LevelThree+Lock`       | Yes    | 4           |
+| `LevelThree+Shift+Lock` | `LevelThree+Shift+Lock` | Yes    | 3           |
+            @endfigcaption
+        </div>
+    </div>
+</div>
+
+[two-type-src]: https://gitlab.freedesktop.org/xkeyboard-config/xkeyboard-config/-/blob/022c3ca1db12e505cbd5ce8bf19c432d6a70c7e5/types/basic#L14
+[alphabetic-type-src]: https://gitlab.freedesktop.org/xkeyboard-config/xkeyboard-config/-/blob/022c3ca1db12e505cbd5ce8bf19c432d6a70c7e5/types/basic#L21
+[four-level-src]: https://gitlab.freedesktop.org/xkeyboard-config/xkeyboard-config/-/blob/022c3ca1db12e505cbd5ce8bf19c432d6a70c7e5/types/extra#L8
+[four-level-alphabetic-src]: https://gitlab.freedesktop.org/xkeyboard-config/xkeyboard-config/-/blob/022c3ca1db12e505cbd5ce8bf19c432d6a70c7e5/types/extra#L20
+[four-level-semialphabetic-src]: https://gitlab.freedesktop.org/xkeyboard-config/xkeyboard-config/-/blob/022c3ca1db12e505cbd5ce8bf19c432d6a70c7e5/types/extra#L36
+
+#### Examples with standard keyboard layouts {#key-type-mappings-examples}
+
+<details>
+    <summary>See the detailed table of mappings</summary>
+The following table compares the mappings of various key types for the modifiers
+`Shift`, `Lock` and `LevelThree`, using the standard layouts [`us`][us-layout]
+(US English) and [`es`][es-layout] (Spanish).
+
+[us-layout]: https://gitlab.freedesktop.org/xkeyboard-config/xkeyboard-config/-/blob/022c3ca1db12e505cbd5ce8bf19c432d6a70c7e5/symbols/us#L3
+[es-layout]: https://gitlab.freedesktop.org/xkeyboard-config/xkeyboard-config/-/blob/022c3ca1db12e505cbd5ce8bf19c432d6a70c7e5/symbols/es#L3
+
+| Key    | Layout | Key type                        | Active modifiers                | Level | Keysym       | Comment     |
+| ------ | ------ | ------------------------------- | ------------------------------- | ----- | ------------ | ----------- |
+| `AE01` | [`us`][us-layout] | [`TWO_LEVEL`][TWO_LEVEL]   | (none)               | 1     | `1`          | |
+| ^      | ^      | ^                               | `Shift`                         | 2     | `exclam`     | |
+| ^      | ^      | ^                               | `Lock`                          | 1     | `1`          | `Lock` filtered out |
+| ^      | ^      | ^                               | `Shift` + `Lock`                | 2     | `exclam`     | `Lock` filtered out |
+| ^      | ^      | ^                               | `LevelThree`                    | 1     | `1`          | `LevelThree` filtered out |
+| ^      | ^      | ^                               | `LevelThree` + `Shift`          | 2     | `exclam`     | `LevelThree` filtered out |
+| ^      | ^      | ^                               | `LevelThree` + `Lock`           | 1     | `1`          | Modifiers `LevelThree` and `Lock` filtered out |
+| ^      | ^      | ^                               | `LevelThree` + `Shift` + `Lock` | 2     | `exclam`     | Modifiers `LevelThree` and `Lock` filtered out |
+| ^      | [`es`][es-layout] | [`FOUR_LEVEL`][FOUR_LEVEL] | (none)                    | 1     | `1`          | |
+| ^      | ^      | ^                               | `Shift`                         | 2     | `exclam`     | |
+| ^      | ^      | ^                               | `Lock`                          | 1     | `1`          | `Lock` filtered out |
+| ^      | ^      | ^                               | `Shift` + `Lock`                | 2     | `exclam`     | `Lock` filtered out |
+| ^      | ^      | ^                               | `LevelThree`                    | 3     | `bar`        | |
+| ^      | ^      | ^                               | `LevelThree` + `Shift`          | 4     | `exclamdown` | |
+| ^      | ^      | ^                               | `LevelThree` + `Lock`           | 3     | `bar`        | `Lock` filtered out |
+| ^      | ^      | ^                               | `LevelThree` + `Shift` + `Lock` | 4     | `exclamdown` | `Lock` filtered out |
+| `AD01` | [`us`][us-layout] | [`ALPHABETIC`][ALPHABETIC] | (none)                    | 1     | `q`          | |
+| ^      | ^      | ^                               | `Shift`                         | 2     | `Q`          | |
+| ^      | ^      | ^                               | `Lock`                          | 2     | `Q`          | |
+| ^      | ^      | ^                               | `Shift` + `Lock`                | 1     | `q`          | `Lock` cancelled by `Shift` |
+| ^      | ^      | ^                               | `LevelThree`                    | 1     | `q`          | `LevelThree` filtered out |
+| ^      | ^      | ^                               | `LevelThree` + `Shift`          | 1     | `q`          | `LevelThree` filtered out |
+| ^      | ^      | ^                               | `LevelThree` + `Lock`           | 2     | `Q`          | `LevelThree` filtered out |
+| ^      | ^      | ^                               | `LevelThree` + `Shift` + `Lock` | 1     | `q`          | `LevelThree` filtered out, `Lock` cancelled by `Shift` |
+| ^      | [`es`][es-layout] | [`FOUR_LEVEL_SEMIALPHABETIC`][FOUR_LEVEL_SEMIALPHABETIC] | (none) | 1 | `q`   | |
+| ^      | ^      | ^                               | `Shift`                         | 2     | `Q`          | |
+| ^      | ^      | ^                               | `Lock`                          | 2     | `Q`          | |
+| ^      | ^      | ^                               | `Shift` + `Lock`                | 1     | `q`          | `Lock` cancelled by `Shift` |
+| ^      | ^      | ^                               | `LevelThree`                    | 3     | `at`         |  |
+| ^      | ^      | ^                               | `LevelThree` + `Shift`          | 4     | `Greek_OMEGA`|  |
+| ^      | ^      | ^                               | `LevelThree` + `Lock`           | 3     | `at`         | `Lock` does not affect `LevelThree` combos |
+| ^      | ^      | ^                               | `LevelThree` + `Shift` + `Lock` | 4     | `Greek_OMEGA`| `Lock` does not affect `LevelThree` combos |
+| `AD05` | [`us`][us-layout] | [`ALPHABETIC`][ALPHABETIC] | (none)                    | 1     | `t`          | |
+| ^      | ^      | ^                               | `Shift`                         | 2     | `T`          | |
+| ^      | ^      | ^                               | `Lock`                          | 2     | `T`          | |
+| ^      | ^      | ^                               | `Shift` + `Lock`                | 1     | `t`          | `Lock` cancelled by `Shift` |
+| ^      | ^      | ^                               | `LevelThree`                    | 1     | `t`          | `LevelThree` filtered out |
+| ^      | ^      | ^                               | `LevelThree` + `Shift`          | 1     | `t`          | `LevelThree` filtered out |
+| ^      | ^      | ^                               | `LevelThree` + `Lock`           | 2     | `T`          | `LevelThree` filtered out |
+| ^      | ^      | ^                               | `LevelThree` + `Shift` + `Lock` | 1     | `t`          | `LevelThree` filtered out, `Lock` cancelled by `Shift` |
+| ^      | [`es`][es-layout] | [`FOUR_LEVEL_ALPHABETIC`][FOUR_LEVEL_ALPHABETIC] | (none) | 1  | `t`          | |
+| ^      | ^      | ^                               | `Shift`                         | 2     | `T`          | |
+| ^      | ^      | ^                               | `Lock`                          | 2     | `T`          | |
+| ^      | ^      | ^                               | `Shift` + `Lock`                | 1     | `t`          | `Lock` cancelled by `Shift` |
+| ^      | ^      | ^                               | `LevelThree`                    | 3     | `tslash`     | |
+| ^      | ^      | ^                               | `LevelThree` + `Shift`          | 4     | `Tslash`     | |
+| ^      | ^      | ^                               | `LevelThree` + `Lock`           | 4     | `Tslash`     | |
+| ^      | ^      | ^                               | `LevelThree` + `Shift` + `Lock` | 3     | `tslash`     | `Lock` cancelled by `Shift` |
+</details>
 
 
 ## The “xkb_compat” section {#the-xkb_compat-section}
 
-This section is the third to be processed, after `xkb_keycodes` and
+This [section] is the third to be processed, after `xkb_keycodes` and
 `xkb_types`.
 
 ### Interpret statements {#interpret-statements}
@@ -641,15 +1272,16 @@ things for each key:
   Actions, like symbols, are specified for each level of each group
   in the key separately.
 
-- Add a [virtual modifier] to the key's virtual modifier mapping
+- Add a [virtual modifier] to the key’s virtual modifier mapping
   (`vmodmap`).
 
 - Specify whether the key should repeat or not.
 
 However, doing this for each key (or level) is tedious and inflexible.
-Interpret's are a mechanism to apply these settings to a bunch of
+Interpret’s are a mechanism to apply these settings to a bunch of
 keys/levels at once.
 
+@anchor interpret-mechanism
 Each interpret specifies a condition by which it attaches to certain
 levels. The condition consists of two parts:
 
@@ -662,7 +1294,7 @@ levels. The condition consists of two parts:
   - A __mask__ of _real_ modifiers: a `+`-separated list of modifiers or
     the special value `all`, which denotes all the modifiers.
 
-    The modifiers are matched against the key's modifier map (`modmap`).
+    The modifiers are matched against the key’s modifier map (`modmap`).
   - A __matching operation__, that is one of the following:
 
     * `AnyOfOrNone` – The modmap must either be empty or include at
@@ -696,13 +1328,13 @@ most specific one is used:
 - If both the keysyms and the matching operations are the same (but the
   modifiers are different), the first interpret is used.
 
-As described above, once an interpret "attaches" to a level, it can bind
-an action to that level, add one virtual modifier to the key's vmodmap,
-or set the key's repeat setting. You should note the following:
+As described above, once an interpret “attaches” to a level, it can bind
+an action to that level, add one virtual modifier to the key’s vmodmap,
+or set the key’s repeat setting. You should note the following:
 
 - The key repeat is a property of the entire key; it is not
   level-specific. In order to avoid confusion, it is only inspected
-  for the first level of the first group; the interpret's repeat
+  for the first level of the first group; the interpret’s repeat
   setting is ignored when applied to other levels.
 
 - If one of the above fields was set directly for a key in
@@ -724,24 +1356,24 @@ level.
 
 Note: the other possible value is `any` and is the default value.
 
-#### “action” statement
+#### “action” statement {#interpret-action}
 
     action = LockMods(modifiers=NumLock);
 
 Bind this action to the matching levels. See [key actions][actions]
 for the list of available key actions.
 
-#### “virtualModifier” statement
+#### “virtualModifier” statement {#interpret-virtualModifier}
 
     virtualModifier = NumLock;
 
-Add this virtual modifier to the key's `vmodmap`. The given virtual
+Add this virtual modifier to the key’s `vmodmap`. The given virtual
 modifier must be declared at the top level of the file with a
 `virtual_modifiers` statement, e.g.:
 
     virtual_modifiers NumLock;
 
-#### “repeat” statement
+#### “repeat” statement {#interpret-repeat}
 
     repeat = True;
 
@@ -756,10 +1388,10 @@ Statements of the form:
     indicator "Shift Lock" { ... }
 
 This statement specifies the behavior and binding of the LED (AKA
-[indicator]) with the given name ("Shift Lock" above). The name should
+[indicator]) with the given name (“Shift Lock” above). The name should
 have been declared previously in the `xkb_keycodes` section (see
 [LED name][indicator name] statement), and given an index there.
-If it wasn't, it is created with the next free index.
+If it wasn’t, it is created with the next free index.
 
 The body of the statement describes the conditions of the keyboard
 state which will cause the LED to be lit. It may include the following
@@ -787,7 +1419,7 @@ This will cause the respective portion of the modifier state (see
 `struct xkb_state`) to be matched against the modifiers given in the
 `modifiers` statement.
 
-Here's a simple example:
+Here’s a simple example:
 
     indicator "Num Lock" {
         modifiers = NumLock;
@@ -828,9 +1460,14 @@ satisfied the LED is lit.
 
 ## The “xkb_symbols” section {#the-xkb_symbols-section}
 
-@todo complete this section.
+<!--
+Ivan Pascal’s doc:
+https://web.archive.org/web/20190723233834/http://pascal.tsu.ru/en/xkb/gram-symbols.html
+-->
 
-This section is the fourth to be processed, after `xkb_keycodes`,
+<!-- TODO complete this section -->
+
+This [section] is the fourth to be processed, after `xkb_keycodes`,
 `xkb_types` and `xkb_compat`.
 
 Statements of the form:
@@ -852,7 +1489,7 @@ whitespace:
 
 The possible flags are:
 
-  * `partial` - Indicates that the map doesn't cover a complete keyboard.
+  * `partial` - Indicates that the map doesn’t cover a complete keyboard.
   * `default` - Marks the symbol map as the default map in the file when no
     explicit map is specified. If no map is marked as a default, the first map
     in the file is the default.
@@ -877,7 +1514,7 @@ Statements of the form:
     name[Group1] = "US/ASCII";
     groupName[1] = "US/ASCII";
 
-Gives the name "US/ASCII" to the first group of symbols. Other groups can be
+Gives the name “US/ASCII” to the first group of symbols. Other groups can be
 named using a different group index (ex: `Group2`), and with a different name.
 A group must be named.
 
@@ -899,24 +1536,175 @@ located in an XKB include path.
 
 Statements of the form:
 
-    key <AD01> { [ q, Q ] };
+    key <AD01> { ... };
 
-Describes the mapping of a keycode `<AD01>` to a given group of symbols. The
-possible keycodes are the keycodes defined in the `xkb_keycodes` section.
+defines the *key description* of the [keycode] `<AD01>` and is the main type
+of record of the `xkb_symbols` section. The possible keycodes are defined in the
+[`xkb_keycodes`](@ref the-xkb_keycodes-section) section.
+
+A key description consists of:
+
+<dl>
+    <dt>Groups</dt>
+    <dd>
+        Each key may have one or more associated [groups]. Each group can be
+        configured with the following parameters:
+
+        - @ref key-type-setting "Type"</dt>
+        - @ref key-symbols-table "Symbols"</dt>
+        - @ref key-actions-table "Actions"</dt>
+    </dd>
+    <dt>Additional attributes</dt>
+    <dd>
+        These attributes are usually set via the <code>[xkb_compat]</code>
+        section, but may be also set directly:
+
+        - @ref key-virtual-modifiers "Virtual modifiers"
+        - @ref key-repeat "Repeat"
+    </dd>
+</dl>
+
+@warning Using multiple groups in *symbols* files is not recommended, because
+some tools rely on the assumption that an `xkb_symbols` section only affect a
+single group. It is fine with a *keymap* file though.
+
+@note In what follows we assume the common use case with a *single* group, which
+benefits from a special syntax. See the section @ref key-groups "Multiple groups"
+for the general syntax.
+
+[groups]: @ref layout-def
+
+#### Symbols {#key-symbols-table}
+
+The main part of the key description is the *symbols table*. It maps shift levels
+to keysyms, e.g.:
+
+```c
+key <AD01> { [ q, Q ] }; // Level 1 → `q`, Level 2 → `Q`
+```
 
 Symbols are named using the symbolic names from the
 `xkbcommon/xkbcommon-keysyms.h` file. A group of symbols is enclosed in brackets
 and separated by commas. Each element of the symbol arrays corresponds to a
-different modifier level. In this example, the symbol (keysym) `XKB_KEY_q` for
-level 1 and `XKB_KEY_Q` for level 2.
+different [shift level]. In this example, the symbol (keysym) `XKB_KEY_q` for
+level 1 and `XKB_KEY_Q` for level 2. These levels are configured by the
+@ref key-type-setting "key type", presented in the next section.
 
-#### Actions
+@remark Remember that @ref keysym-transformations may affect the resulting
+keysym when some modifiers are not [consumed](@ref consumed-modifiers).
 
-@todo how to bind key actions
+As an extension to the XKB format, libxkbcommon supports multiple key symbols
+per level.
+
+    key <AD01> { [ {a, b}, Q ] };
+
+In this example, the keycode `<AD01>` produces two symbols on level 1
+(`XKB_KEY_a` and `XKB_KEY_b`) and one symbol (`XKB_KEY_Q`) on level 2.
+
+@warning Keymaps containing multiple key symbols per level are not supported
+by the various X11-related tools (`setxkbmap`, `xkbcomp`, etc.).
+
+[symbols table]: @ref key-symbols-table
+
+#### Type {#key-type-setting}
+
+Each key has a [key type] set per group. This key type is defined in the
+<code>[xkb_types]</code> section. Its associated [shift levels] are used to
+index the [symbols table] presented in the previous section.
+
+A key type is set using the following syntax:
+
+<!-- TODO: it also works without the group index -->
+
+```c
+key <AD01> {
+    type[Group1] = "TWO_LEVEL", // Type
+    [q, Q]                      // Symbols
+};
+```
+
+The name of the key type is enclosed between double quotes.
+
+The key type may be omitted and will default to:
+
+- `key.type` global defaults, if set.
+- a standard type using the following **heuristic**:
+  <!-- See: xkbcomp/symbols.c (FindAutomaticType) -->
+  - **1** keysym: `ONE_LEVEL`
+  - **2** keysyms:
+    - if the two keysyms are letter and the first is lower case and the other
+      upper case, then [`ALPHABETIC`][ALPHABETIC];
+    - if one of the keysyms is numpad, then `KEYPAD` else [`TWO_LEVEL`][TWO_LEVEL].
+  - **3 or 4** keysyms (a missing 4th keysym is set to `NoSymbol`):
+    - if the first two keysyms are letters and the first is lower case and the
+      other upper case:
+      - if the last two keysyms are letters and the first is lower case and the
+        other upper case then [`FOUR_LEVEL_ALPHABETIC`][FOUR_LEVEL_ALPHABETIC];
+      - else [`FOUR_LEVEL_SEMIALPHABETIC`][FOUR_LEVEL_SEMIALPHABETIC].
+    - if one of the first two keysyms is numpad, then `FOUR_LEVEL_KEYPAD`;
+    - else [`FOUR_LEVEL`][FOUR_LEVEL].
+
+@figure@figcaption
+Commented examples for inferred types:
+@endfigcaption
+
+```c
+// 1 to 2 keysyms
+key <LFSH> { [Shift_L] };                    // Type: ONE_LEVEL
+key <AE01> { [1, exclam] };                  // Type: TWO_LEVEL
+key <AD01> { [q, Q] };                       // Type: ALPHABETIC
+key <KP1>  { [KP_End, KP_1] };               // Type: KEYPAD
+// Edge case: this is consider alphabetic, although
+// the lower case does not correspond to the upper case.
+key <AD01> { [q, N] };                       // Type: ALPHABETIC
+
+// 3 to 4 keysyms
+key <AE01> { [1, exclam, bar] };             // Type: FOUR_LEVEL
+key <AE01> { [1, exclam, bar, exclamdown] }; // Type: FOUR_LEVEL
+key <AD01> { [q, Q, at] };                   // Type: FOUR_LEVEL_SEMIALPHABETIC
+key <AD01> { [q, Q, at, Greek_OMEGA] };      // Type: FOUR_LEVEL_SEMIALPHABETIC
+key <AD05> { [t, T, tslash, Tslash] };       // Type: FOUR_LEVEL_ALPHABETIC
+
+// The inferred type is `FOUR_LEVEL`, but using `LevelThree+Lock`
+// will produce `Q`, because of the keysyms transformations and
+// the corresponding internal capitalization processing.
+key <AE01> { [1, exclam, q, Q] };            // Type: FOUR_LEVEL
+
+// Won’t work, because there is no heuristic for more than 4 keysyms
+// It will trigger the warnings XKB-183 and XKB-516 and default to ONE_LEVEL,
+// ignoring all the keysyms but the first one.
+key <AD01> {[q, Q, at, any, masculine, U2642]};
+// Will work as expected
+key <AD01> {
+    type[Group1] = "EIGHT_LEVEL_SEMIALPHABETIC",
+    [q, Q, at, any, masculine, U2642]
+};
+```
+@endfigure
+
+#### Actions {#key-actions-table}
+
+@note This is usually not set explicitly but via the
+<em>[interpret mechanism]</em> by using the
+[`action`](@ref interpret-action) statement in the
+<code>[xkb_compat]</code> section.
+
+
+@figure@figcaption
+Example: Set the modifier action of the key `<LALT>` manually.
+@endfigcaption
+
+```c
+key <LALT> {
+    symbols[Group1]=[Alt_L],
+    actions[Group1]=[SetMods(modifiers=modMapMods)]
+};
+```
+@endfigure
 
 For further details see [key actions][actions].
 
-#### Groups
+#### Multiple groups {#key-groups}
 
 Each group represents a list of symbols mapped to a keycode:
 
@@ -938,13 +1726,60 @@ statement only defines the Group3 of a mapping:
 
     key <AD01> { [], [], [ q, Q ] };
 
-#### Additional attributes
+@warning Using multiple groups in *symbols* files is not recommended, because
+some tools rely on the assumption that an `xkb_symbols` section only affect a
+single group. It is fine with a *keymap* file though.
 
-@todo virtualmodifiers, repeats
+#### Virtual modifiers {#key-virtual-modifiers}
+
+@note This is usually not set explicitly but via the
+<em>[interpret mechanism]</em> by using the
+[`virtualModifier`](@ref interpret-virtualModifier) statement from the
+<code>[xkb_compat]</code> section.
+
+@remarks When setting a [modifier action](@ref modifiers-actions), it is required
+to declare the corresponding virtual modifier using a
+[`virtual_modifiers`](@ref virtual-modifier-statements) statement.
+
+@figure@figcaption
+Example: Set the virtual modifier of the key `<LALT>` to `Alt`.
+@endfigcaption
+
+```c
+// Declare the virtual modifier that will be used
+virtual_modifiers Alt;
+
+key  <LALT> {
+    virtualModifiers = Alt,
+    [ Alt_L ]
+};
+```
+@endfigure
+
+[interpret mechanism]: @ref interpret-mechanism
+
+#### Repeat {#key-repeat}
+
+@note This is usually not set explicitly but via the
+<em>[interpret mechanism]</em> by using the
+[`repeat`](@ref interpret-repeat) statement in the
+<code>[xkb_compat]</code> section.
+
+@figure@figcaption
+Example: make the `<LALT>` key not repeating.
+@endfigcaption
+
+```c
+key  <LALT> {
+    repeat = False,
+    [ Alt_L ]
+};
+```
+@endfigure
 
 ## Virtual modifier statements {#virtual-modifier-statements}
 
-@todo rework this section
+<!-- TODO: rework this section -->
 
 Statements of the form:
 
@@ -965,28 +1800,28 @@ Note that in X11, the maximum of virtual modifiers is 16
 The following table summarizes the modifiers defined
 in <code>[xkeyboard-config]</code> (this is subject to change).
 
-| Modifier     | Type    | Compat files     | Associated keysyms   |
-|--------------|---------|------------------|----------------------|
-| `Shift`      | Real    | `compat/basic`   | `Shift_L`, `Shift_R`     |
-| ″            | ″       | `compat/iso9995` | `Shift_L`, `Shift_R`, `ISO_Level2_Latch` |
-| `Lock`       | Real    | `compat/basic`,  | `Caps_Lock`            |
-| ″            | ″       | `compat/caps`    | ″                    |
-| `Control`    | Real    | `compat/basic`   | `Control_L`, `Control_R` |
-| `Alt`        | Virtual | `compat/misc`,   | `Alt_L`, `Alt_R`         |
-| ″            | ″       | `compat/pc`      | ″                    |
-| `Meta`       | Virtual | `compat/misc`    | `Meta_L`, `Meta_R`       |
-| `Super`      | Virtual | `compat/misc`    | `Super_L`, `Super_R`     |
-| `Hyper`      | Virtual | `compat/misc`    | `Hyper_L`, `Hyper_R`     |
-| `ScrollLock` | Virtual | `compat/misc`    | `Scroll_Lock`          |
-| `NumLock`    | Virtual | `compat/basic`,  | `Num_Lock`,            |
-| ″            | ″       | `compat/level5`  | (`ISO_Level5_Lock`)    |
+| Modifier     | Type    | Compat files     | Associated keysyms                                        |
+|--------------|---------|------------------|-----------------------------------------------------------|
+| `Shift`      | Real    | `compat/basic`   | `Shift_L`, `Shift_R`                                      |
+| ″            | ″       | `compat/iso9995` | `Shift_L`, `Shift_R`, `ISO_Level2_Latch`                  |
+| `Lock`       | Real    | `compat/basic`,  | `Caps_Lock`                                               |
+| ″            | ″       | `compat/caps`    | ″                                                         |
+| `Control`    | Real    | `compat/basic`   | `Control_L`, `Control_R`                                  |
+| `Alt`        | Virtual | `compat/misc`,   | `Alt_L`, `Alt_R`                                          |
+| ″            | ″       | `compat/pc`      | ″                                                         |
+| `Meta`       | Virtual | `compat/misc`    | `Meta_L`, `Meta_R`                                        |
+| `Super`      | Virtual | `compat/misc`    | `Super_L`, `Super_R`                                      |
+| `Hyper`      | Virtual | `compat/misc`    | `Hyper_L`, `Hyper_R`                                      |
+| `ScrollLock` | Virtual | `compat/misc`    | `Scroll_Lock`                                             |
+| `NumLock`    | Virtual | `compat/basic`,  | `Num_Lock`,                                               |
+| ″            | ″       | `compat/level5`  | (`ISO_Level5_Lock`)                                       |
 | `LevelThree` | Virtual | `compat/iso9995` | `ISO_Level3_Shift`, `ISO_Level3_Latch`, `ISO_Level3_Lock` |
 | `LevelFive`  | Virtual | `compat/level5`  | `ISO_Level5_Shift`, `ISO_Level5_Latch`, `ISO_Level5_Lock` |
-| `Kana_Lock`  | Virtual | `compat/japan`   | `Kana_Lock`            |
-| `Square`     | Virtual | `compat/olpc`    | `KP_Home`              |
-| `Cross`      | Virtual | `compat/olpc`    | `KP_Next`              |
-| `Circle`     | Virtual | `compat/olpc`    | `KP_End`               |
-| `Triangle`   | Virtual | `compat/olpc`    | `KP_Prior`             |
+| `Kana_Lock`  | Virtual | `compat/japan`   | `Kana_Lock`                                               |
+| `Square`     | Virtual | `compat/olpc`    | `KP_Home`                                                 |
+| `Cross`      | Virtual | `compat/olpc`    | `KP_Next`                                                 |
+| `Circle`     | Virtual | `compat/olpc`    | `KP_End`                                                  |
+| `Triangle`   | Virtual | `compat/olpc`    | `KP_Prior`                                                |
 
 ### Define and use a modifier
 

@@ -50,13 +50,58 @@
 #ifndef KEYSYM_H
 #define KEYSYM_H
 
+#include <stdbool.h>
+#include "xkbcommon/xkbcommon.h"
+
 /*
  * NOTE: this is not defined in xkbcommon.h, because if we did, it may add
  * overhead for library user: when handling keysyms they would also need to
  * check min keysym when previously there was no reason to.
  */
 /** Minimum keysym value */
-#define XKB_KEYSYM_MIN      0x00000000
+#define XKB_KEYSYM_MIN            0x00000000
+/** Minimum keysym value assigned */
+#define XKB_KEYSYM_MIN_ASSIGNED   ((xkb_keysym_t)0x00000000)
+/** Maximum keysym value assigned */
+#define XKB_KEYSYM_MAX_ASSIGNED   0x1008ffb8
+/** Minimum keysym value with explicit name */
+#define XKB_KEYSYM_MIN_EXPLICIT   0x00000000
+/** Maximum keysym value with explicit name */
+#define XKB_KEYSYM_MAX_EXPLICIT   0x1008ffb8
+/** Count of keysym value with explicit name */
+#define XKB_KEYSYM_COUNT_EXPLICIT 2446
+/** Offset to use when converting a Unicode code point to a keysym */
+#define XKB_KEYSYM_UNICODE_OFFSET 0x01000000
+/** Minimum Unicode keysym. NOTE: code points in 0..0xff cannot be converted. */
+#define XKB_KEYSYM_UNICODE_MIN    0x01000100
+/** Maximum Unicode keysym, correspoding to the maximum Unicode code point */
+#define XKB_KEYSYM_UNICODE_MAX    0x0110ffff
+/** Maximum keysym name length */
+#define XKB_KEYSYM_NAME_MAX_SIZE  27
+
+bool
+xkb_keysym_is_assigned(xkb_keysym_t ks);
+
+struct xkb_keysym_iterator;
+
+struct xkb_keysym_iterator*
+xkb_keysym_iterator_new(bool explicit);
+
+struct xkb_keysym_iterator*
+xkb_keysym_iterator_unref(struct xkb_keysym_iterator *iter);
+
+bool
+xkb_keysym_iterator_next(struct xkb_keysym_iterator *iter);
+
+xkb_keysym_t
+xkb_keysym_iterator_get_keysym(struct xkb_keysym_iterator *iter);
+
+int
+xkb_keysym_iterator_get_name(struct xkb_keysym_iterator *iter,
+                             char *buffer, size_t size);
+
+bool
+xkb_keysym_iterator_is_explicitly_named(struct xkb_keysym_iterator *iter);
 
 bool
 xkb_keysym_is_lower(xkb_keysym_t keysym);

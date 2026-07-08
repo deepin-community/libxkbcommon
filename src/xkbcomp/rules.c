@@ -879,7 +879,7 @@ matcher_rule_apply_if_matches(struct matcher *m, struct scanner *s)
             matched = match_value_and_mark(m, value, to, match_type);
         }
         else if (mlvo == MLVO_VARIANT) {
-            xkb_layout_index_t idx = m->mapping.layout_idx;
+            xkb_layout_index_t idx = m->mapping.variant_idx;
             idx = (idx == XKB_LAYOUT_INVALID ? 0 : idx);
             to = &darray_item(m->rmlvo.variants, idx);
             matched = match_value_and_mark(m, value, to, match_type);
@@ -978,6 +978,14 @@ include_statement:
     switch (tok = gettok(m, s)) {
     case TOK_IDENTIFIER:
         matcher_include(m, s, include_depth, m->val.string);
+        goto include_statement_end;
+    default:
+        goto unexpected;
+    }
+
+include_statement_end:
+    switch (tok = gettok(m, s)) {
+    case TOK_END_OF_LINE:
         goto initial;
     default:
         goto unexpected;
@@ -1084,25 +1092,36 @@ read_rules_file(struct xkb_context *ctx,
                 FILE *file,
                 const char *path)
 {
-    bool ret = false;
+    bool ret;
     char *string;
     size_t size;
     struct scanner scanner;
 
-    ret = map_file(file, &string, &size);
-    if (!ret) {
+    if (!map_file(file, &string, &size)) {
         log_err(ctx, XKB_LOG_MESSAGE_NO_ID,
                 "Couldn't read rules file \"%s\": %s\n",
                 path, strerror(errno));
-        goto out;
+        return false;
     }
 
     scanner_init(&scanner, matcher->ctx, string, size, path, NULL);
 
-    ret = matcher_match(matcher, &scanner, include_depth, string, size, path);
+    /* Basic detection of wrong character encoding.
+       The first character relevant to the grammar must be ASCII:
+       whitespace, !, / (for comment) */
+    if (!scanner_check_supported_char_encoding(&scanner)) {
+        scanner_err(&scanner,
+            "This could be a file encoding issue. "
+            "Supported encodings must be backward compatible with ASCII.");
+        scanner_err(&scanner,
+            "E.g. ISO/CEI 8859 and UTF-8 are supported "
+            "but UTF-16, UTF-32 and CP1026 are not.");
+        unmap_file(string, size);
+        return false;
+    }
 
+    ret = matcher_match(matcher, &scanner, include_depth, string, size, path);
     unmap_file(string, size);
-out:
     return ret;
 }
 

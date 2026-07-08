@@ -43,9 +43,14 @@
 #ifdef _WIN32
 # include <direct.h>
 # include <io.h>
+# include <BaseTsd.h>
 # ifndef S_ISDIR
 #  define S_ISDIR(m) (((m) & S_IFMT) == S_IFDIR)
 # endif
+# ifndef S_ISREG
+#  define S_ISREG(m) (((m) & S_IFMT) == S_IFREG)
+# endif
+typedef SSIZE_T ssize_t;
 #endif
 
 #include "darray.h"
@@ -64,6 +69,8 @@
 
 #define STRINGIFY(x) #x
 #define STRINGIFY2(x) STRINGIFY(x)
+#define CONCAT(x,y) x ## y
+#define CONCAT2(x,y) CONCAT(x,y)
 
 /* Check if a character is valid in a string literal */
 static inline bool
@@ -174,6 +181,12 @@ strndup(const char *s, size_t n)
 
 /* ctype.h is locale-dependent and has other oddities. */
 static inline bool
+is_ascii(char ch)
+{
+    return (ch & ~0x7f) == 0;
+}
+
+static inline bool
 is_space(char ch)
 {
     return ch == ' ' || (ch >= '\t' && ch <= '\r');
@@ -254,6 +267,9 @@ check_eaccess(const char *path, int mode)
 
     return true;
 }
+
+FILE*
+open_file(const char *path);
 
 #if defined(HAVE_SECURE_GETENV)
 # define secure_getenv secure_getenv

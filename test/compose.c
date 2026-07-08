@@ -22,10 +22,16 @@
  */
 
 #include "config.h"
+#include <time.h>
+#include <errno.h>
 
 #include "xkbcommon/xkbcommon-compose.h"
 
 #include "test.h"
+#include "src/utf8.h"
+#include "src/keysym.h"
+#include "src/compose/parser.h"
+#include "src/compose/dump.h"
 
 static const char *
 compose_status_string(enum xkb_compose_status status)
@@ -69,7 +75,7 @@ test_compose_seq_va(struct xkb_compose_table *table, va_list ap)
 {
     int ret;
     struct xkb_compose_state *state;
-    char buffer[64];
+    char buffer[MAX(XKB_COMPOSE_MAX_STRING_SIZE, XKB_KEYSYM_NAME_MAX_SIZE)];
 
     state = xkb_compose_state_new(table, XKB_COMPOSE_STATE_NO_FLAGS);
     assert(state);
@@ -171,6 +177,90 @@ test_compose_seq_buffer(struct xkb_context *ctx, const char *buffer, ...)
     xkb_compose_table_unref(table);
     return ok;
 }
+
+static void
+test_compose_utf8_bom(struct xkb_context *ctx)
+{
+    const char buffer[] = "\xef\xbb\xbf<A> : X";
+    assert(test_compose_seq_buffer(ctx, buffer,
+        XKB_KEY_A, XKB_COMPOSE_FEED_ACCEPTED, XKB_COMPOSE_COMPOSED, "X", XKB_KEY_X,
+        XKB_KEY_NoSymbol));
+}
+
+static void
+test_invalid_encodings(struct xkb_context *ctx)
+{
+    struct xkb_compose_table *table;
+
+    /* ISO 8859-1 (latin1) */
+    const char iso_8859_1[] = "<A> : \"\xe1\" acute";
+    assert(!test_compose_seq_buffer(ctx, iso_8859_1,
+        XKB_KEY_A, XKB_COMPOSE_FEED_ACCEPTED, XKB_COMPOSE_COMPOSED, "\xc3\xa1", XKB_KEY_acute,
+        XKB_KEY_NoSymbol));
+
+    /* UTF-16LE */
+    const char utf_16_le[] =
+        "<\0A\0>\0 \0:\0 \0X\0\n\0"
+        "<\0B\0>\0 \0:\0 \0Y\0";
+    table = xkb_compose_table_new_from_buffer(ctx,
+                                              utf_16_le, sizeof(utf_16_le), "",
+                                              XKB_COMPOSE_FORMAT_TEXT_V1,
+                                              XKB_COMPOSE_COMPILE_NO_FLAGS);
+    assert(!table);
+
+    /* UTF-16BE */
+    const char utf_16_be[] =
+        "\0<\0A\0>\0 \0:\0 \0X\0\n"
+        "\0<\0B\0>\0 \0:\0 \0Y";
+    table = xkb_compose_table_new_from_buffer(ctx,
+                                              utf_16_be, sizeof(utf_16_be), "",
+                                              XKB_COMPOSE_FORMAT_TEXT_V1,
+                                              XKB_COMPOSE_COMPILE_NO_FLAGS);
+    assert(!table);
+
+    /* UTF-16BE with BOM */
+    const char utf_16_be_bom[] =
+        "\xfe\xff"
+        "\0<\0A\0>\0 \0:\0 \0X\0\n"
+        "\0<\0B\0>\0 \0:\0 \0Y";
+    table = xkb_compose_table_new_from_buffer(ctx,
+                                              utf_16_be_bom, sizeof(utf_16_be_bom), "",
+                                              XKB_COMPOSE_FORMAT_TEXT_V1,
+                                              XKB_COMPOSE_COMPILE_NO_FLAGS);
+    assert(!table);
+
+    /* UTF-32LE */
+    const char utf_32_le[] =
+        "<\0\0\0A\0\0\0>\0\0\0 \0\0\0:\0\0\0 \0\0\0X\0\0\0\n\0\0\0"
+        "<\0\0\0B\0\0\0>\0\0\0 \0\0\0:\0\0\0 \0\0\0Y\0\0\0";
+    table = xkb_compose_table_new_from_buffer(ctx,
+                                              utf_32_le, sizeof(utf_32_le), "",
+                                              XKB_COMPOSE_FORMAT_TEXT_V1,
+                                              XKB_COMPOSE_COMPILE_NO_FLAGS);
+    assert(!table);
+
+    /* UTF-32LE with BOM */
+    const char utf_32_le_bom[] =
+        "\xff\xfe\0\0"
+        "<\0\0\0A\0\0\0>\0\0\0 \0\0\0:\0\0\0 \0\0\0X\0\0\0\n\0\0\0"
+        "<\0\0\0B\0\0\0>\0\0\0 \0\0\0:\0\0\0 \0\0\0Y\0\0\0";
+    table = xkb_compose_table_new_from_buffer(ctx,
+                                              utf_32_le_bom, sizeof(utf_32_le_bom), "",
+                                              XKB_COMPOSE_FORMAT_TEXT_V1,
+                                              XKB_COMPOSE_COMPILE_NO_FLAGS);
+    assert(!table);
+
+    /* UTF-32BE */
+    const char utf_32_be[] =
+        "\0\0\0<\0\0\0A\0\0\0>\0\0\0 \0\0\0:\0\0\0 \0\0\0X\0\0\0\n\0\0\0"
+        "<\0\0\0B\0\0\0>\0\0\0 \0\0\0:\0\0\0 \0\0\0Y";
+    table = xkb_compose_table_new_from_buffer(ctx,
+                                              utf_32_be, sizeof(utf_32_be), "",
+                                              XKB_COMPOSE_FORMAT_TEXT_V1,
+                                              XKB_COMPOSE_COMPILE_NO_FLAGS);
+    assert(!table);
+}
+
 
 static void
 test_seqs(struct xkb_context *ctx)
@@ -410,6 +500,18 @@ test_XCOMPOSEFILE(struct xkb_context *ctx)
     struct xkb_compose_table *table;
     char *path;
 
+    /* Error: directory */
+    path = test_get_path("locale/en_US.UTF-8");
+    setenv("XCOMPOSEFILE", path, 1);
+    free(path);
+
+    table = xkb_compose_table_new_from_locale(ctx, "blabla",
+                                              XKB_COMPOSE_COMPILE_NO_FLAGS);
+    assert_printf(errno != ENODEV && errno != EISDIR,
+                  "Should not be an error from `map_file`\n");
+    assert(!table);
+
+    /* OK: regular file */
     path = test_get_path("locale/en_US.UTF-8/Compose");
     setenv("XCOMPOSEFILE", path, 1);
     free(path);
@@ -619,7 +721,19 @@ static void
 test_traverse(struct xkb_context *ctx)
 {
     struct xkb_compose_table *table;
+    struct xkb_compose_table_iterator *iter;
 
+    /* Empty table */
+    table = xkb_compose_table_new_from_buffer(ctx, "", 0, "",
+                                              XKB_COMPOSE_FORMAT_TEXT_V1,
+                                              XKB_COMPOSE_COMPILE_NO_FLAGS);
+    assert(table);
+    iter = xkb_compose_table_iterator_new(table);
+    assert (xkb_compose_table_iterator_next(iter) == NULL);
+    xkb_compose_table_iterator_free(iter);
+    xkb_compose_table_unref(table);
+
+    /* Non-empty table */
     const char *buffer = "<dead_circumflex> <dead_circumflex> : \"foo\" X\n"
                          "<Ahook> <x> : \"foobar\"\n"
                          "<Multi_key> <o> <e> : oe\n"
@@ -636,7 +750,7 @@ test_traverse(struct xkb_context *ctx)
                                               XKB_COMPOSE_COMPILE_NO_FLAGS);
     assert(table);
 
-    struct xkb_compose_table_iterator *iter = xkb_compose_table_iterator_new(table);
+    iter = xkb_compose_table_iterator_new(table);
 
     test_eq_entry(xkb_compose_table_iterator_next(iter),
                   XKB_KEY_eacute, "é",
@@ -685,18 +799,142 @@ test_traverse(struct xkb_context *ctx)
 }
 
 static void
-test_escape_sequences(struct xkb_context *ctx)
+test_string_length(struct xkb_context *ctx)
+{
+    // Invalid: empty string
+    const char table_string_1[] = "<a> <b> : \"\" X\n";
+    assert(test_compose_seq_buffer(ctx, table_string_1,
+        XKB_KEY_a, XKB_COMPOSE_FEED_ACCEPTED, XKB_COMPOSE_COMPOSING, "", XKB_KEY_NoSymbol,
+        XKB_KEY_b, XKB_COMPOSE_FEED_ACCEPTED, XKB_COMPOSE_COMPOSED,  "", XKB_KEY_X,
+        XKB_KEY_NoSymbol));
+
+    char long_string[XKB_COMPOSE_MAX_STRING_SIZE] = { 0 };
+    memset(long_string, 0x61, XKB_COMPOSE_MAX_STRING_SIZE - 1);
+    char table_string_2[XKB_COMPOSE_MAX_STRING_SIZE + sizeof(table_string_1) - 1];
+    assert(snprintf_safe(table_string_2, sizeof(table_string_2),
+                         "<a> <b> : \"%s\" X\n", long_string));
+    assert(test_compose_seq_buffer(ctx, table_string_2,
+        XKB_KEY_a, XKB_COMPOSE_FEED_ACCEPTED, XKB_COMPOSE_COMPOSING, "",          XKB_KEY_NoSymbol,
+        XKB_KEY_b, XKB_COMPOSE_FEED_ACCEPTED, XKB_COMPOSE_COMPOSED,  long_string, XKB_KEY_X,
+        XKB_KEY_NoSymbol));
+}
+
+static void
+test_decode_escape_sequences(struct xkb_context *ctx)
 {
     /* The following escape sequences should be ignored:
      * • \401 overflows
      * • \0 and \x0 produce NULL
      */
-    const char *table_string = "<o> <e> : \"\\401f\\x0o\\0o\" X\n";
+    const char table_string_1[] = "<o> <e> : \"\\401f\\x0o\\0o\" X\n";
 
-    assert(test_compose_seq_buffer(ctx, table_string,
+    assert(test_compose_seq_buffer(ctx, table_string_1,
         XKB_KEY_o, XKB_COMPOSE_FEED_ACCEPTED, XKB_COMPOSE_COMPOSING,  "",     XKB_KEY_NoSymbol,
         XKB_KEY_e, XKB_COMPOSE_FEED_ACCEPTED, XKB_COMPOSE_COMPOSED,   "foo",  XKB_KEY_X,
         XKB_KEY_NoSymbol));
+
+    /* Test various cases */
+    const char table_string_2[] =
+        "<a> : \"\\x0abcg\\\"x\" A\n" /* hexadecimal sequence has max 2 chars */
+        "<b> : \"éxyz\" B\n"          /* non-ASCII (2 bytes) */
+        "<c> : \"€xyz\" C\n"          /* non-ASCII (3 bytes) */
+        "<d> : \"✨xyz\" D\n"         /* non-ASCII (4 bytes) */
+        "<e> : \"✨\\x0aé\\x0a€x\\\"\" E\n"
+        "<f> : \"\" F\n";
+
+    assert(test_compose_seq_buffer(ctx, table_string_2,
+        XKB_KEY_a, XKB_COMPOSE_FEED_ACCEPTED, XKB_COMPOSE_COMPOSED, "\x0a""bcg\"x",   XKB_KEY_A,
+        XKB_KEY_b, XKB_COMPOSE_FEED_ACCEPTED, XKB_COMPOSE_COMPOSED, "éxyz",           XKB_KEY_B,
+        XKB_KEY_c, XKB_COMPOSE_FEED_ACCEPTED, XKB_COMPOSE_COMPOSED, "€xyz",           XKB_KEY_C,
+        XKB_KEY_d, XKB_COMPOSE_FEED_ACCEPTED, XKB_COMPOSE_COMPOSED, "✨xyz",           XKB_KEY_D,
+        XKB_KEY_e, XKB_COMPOSE_FEED_ACCEPTED, XKB_COMPOSE_COMPOSED, "✨\x0aé\x0a€x\"", XKB_KEY_E,
+        XKB_KEY_f, XKB_COMPOSE_FEED_ACCEPTED, XKB_COMPOSE_COMPOSED, "",               XKB_KEY_F,
+        XKB_KEY_NoSymbol));
+}
+
+static uint32_t
+random_non_null_unicode_char(bool ascii)
+{
+    if (ascii)
+        return 0x01 + (rand() % 0x80);
+    switch (rand() % 5) {
+        case 0:
+            /* U+0080..U+07FF: 2 bytes in UTF-8 */
+            return 0x80 + (rand() % 0x800);
+        case 1:
+            /* U+0800..U+FFFF: 3 bytes in UTF-8 */
+            return 0x800 + (rand() % 0x10000);
+        case 2:
+            /* U+10000..U+10FFFF: 4 bytes in UTF-8 */
+            return 0x10000 + (rand() % 0x110000);
+        default:
+            /* NOTE: Higher probability for ASCII */
+            /* U+0001..U+007F: 1 byte in UTF-8 */
+            return 0x01 + (rand() % 0x80);
+    }
+}
+
+static void
+test_encode_escape_sequences(struct xkb_context *ctx)
+{
+    char *escaped;
+
+    /* Test empty string */
+    escaped = escape_utf8_string_literal("");
+    assert_streq_not_null("Empty string", "", escaped);
+    free(escaped);
+
+    /* Test specific ASCII characters: ", \ */
+    escaped = escape_utf8_string_literal("\"\\");
+    assert_streq_not_null("Quote and backslash", "\\\"\\\\", escaped);
+    free(escaped);
+
+    /* Test round-trip of random strings */
+#   define SAMPLE_SIZE 1000
+#   define MIN_CODE_POINT 0x0001
+#   define MAX_CODE_POINTS_COUNT 15
+    char buf[1 + MAX_CODE_POINTS_COUNT * 4];
+    for (int ascii = 1; ascii >= 0; ascii--) {
+        for (size_t s = 0; s < SAMPLE_SIZE; s++) {
+            /* Create the string */
+            size_t length = 1 + (rand() % MAX_CODE_POINTS_COUNT);
+            size_t c = 0;
+            for (size_t idx = 0; idx < length; idx++) {
+                int nbytes;
+                /* Get a random Unicode code point and encode it in UTF-8 */
+                do {
+                    const uint32_t cp = random_non_null_unicode_char(ascii);
+                    nbytes = utf32_to_utf8(cp, &buf[c]);
+                } while (!nbytes); /* Handle invalid code point in UTF-8 */
+                c += nbytes - 1;
+                assert(c <= sizeof(buf) - 1);
+            }
+            assert_printf(buf[c] == '\0', "NULL-terminated string\n");
+            assert_printf(strlen(buf) == c, "Contains no NULL char\n");
+            assert_printf(is_valid_utf8(buf, c),
+                          "Invalid input UTF-8 string: \"%s\"\n", buf);
+            /* Escape the string */
+            escaped = escape_utf8_string_literal(buf);
+            if (!escaped)
+                break;
+            assert_printf(is_valid_utf8(escaped, strlen(escaped)),
+                          "Invalid input UTF-8 string: %s\n", escaped);
+            char *string_literal = asprintf_safe("\"%s\"", escaped);
+            if (!string_literal) {
+                free(escaped);
+                break;
+            }
+            /* Unescape the string */
+            char *unescaped = parse_string_literal(ctx, string_literal);
+            assert_streq_not_null("Escaped string", buf, unescaped);
+            free(unescaped);
+            free(string_literal);
+            free(escaped);
+        }
+    }
+#   undef SAMPLE_SIZE
+#   undef MIN_CODE_POINT
+#   undef MAX_CODE_POINTS_COUNT
 }
 
 int
@@ -704,13 +942,25 @@ main(int argc, char *argv[])
 {
     struct xkb_context *ctx;
 
+    test_init();
+
     ctx = test_get_context(CONTEXT_NO_FLAG);
     assert(ctx);
+
+    /* Initialize pseudo-random generator with program arg or current time */
+    int seed;
+    if (argc == 2) {
+        seed = atoi(argv[1]);
+    } else {
+        seed = time(NULL);
+    }
+    fprintf(stderr, "Seed for the pseudo-random generator: %d\n", seed);
+    srand(seed);
 
     /*
      * Ensure no environment variables but “top_srcdir” is set. This ensures
      * that user Compose file paths are unset before the tests and set
-     * explicitely when necessary.
+     * explicitly when necessary.
      */
 #ifdef __linux__
     const char *srcdir = getenv("top_srcdir");
@@ -723,6 +973,8 @@ main(int argc, char *argv[])
     unsetenv("XLOCALEDIR");
 #endif
 
+    test_compose_utf8_bom(ctx);
+    test_invalid_encodings(ctx);
     test_seqs(ctx);
     test_conflicting(ctx);
     test_XCOMPOSEFILE(ctx);
@@ -732,7 +984,9 @@ main(int argc, char *argv[])
     test_include(ctx);
     test_override(ctx);
     test_traverse(ctx);
-    test_escape_sequences(ctx);
+    test_string_length(ctx);
+    test_decode_escape_sequences(ctx);
+    test_encode_escape_sequences(ctx);
 
     xkb_context_unref(ctx);
     return 0;

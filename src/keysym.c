@@ -55,10 +55,48 @@
 #include "keysym.h"
 #include "ks_tables.h"
 
+static ssize_t
+find_keysym_index(xkb_keysym_t ks)
+{
+    /* Lower bound:
+     * keysym_to_name[0].keysym
+     * == XKB_KEYSYM_MIN_EXPLICIT == XKB_KEYSYM_MIN == 0
+     * No need to check: xkb_keysym_t is unsigned.
+     *
+     * Upper bound:
+     * keysym_to_name[ARRAY_SIZE(keysym_to_name) - 1].keysym
+     * == XKB_KEYSYM_MAX_EXPLICIT <= XKB_KEYSYM_MAX
+     */
+    if (ks > XKB_KEYSYM_MAX_EXPLICIT)
+        return -1;
+
+    ssize_t lo = 0, hi = ARRAY_SIZE(keysym_to_name) - 1;
+    while (hi >= lo) {
+        ssize_t mid = (lo + hi) / 2;
+        if (ks > keysym_to_name[mid].keysym) {
+            lo = mid + 1;
+        } else if (ks < keysym_to_name[mid].keysym) {
+            hi = mid - 1;
+        } else {
+            return mid;
+        }
+    }
+
+    return -1;
+}
+
 static inline const char *
 get_name(const struct name_keysym *entry)
 {
     return keysym_names + entry->offset;
+}
+
+/* Unnamed Unicode codepoint. */
+static inline int
+get_unicode_name(xkb_keysym_t ks, char *buffer, size_t size)
+{
+    const int width = (ks & 0xff0000UL) ? 8 : 4;
+    return snprintf(buffer, size, "U%0*lX", width, ks & 0xffffffUL);
 }
 
 XKB_EXPORT int
@@ -69,26 +107,115 @@ xkb_keysym_get_name(xkb_keysym_t ks, char *buffer, size_t size)
         return -1;
     }
 
-    int32_t lo = 0, hi = ARRAY_SIZE(keysym_to_name) - 1;
-    while (hi >= lo) {
-        int32_t mid = (lo + hi) / 2;
-        if (ks > keysym_to_name[mid].keysym) {
-            lo = mid + 1;
-        } else if (ks < keysym_to_name[mid].keysym) {
-            hi = mid - 1;
-        } else {
-            return snprintf(buffer, size, "%s", get_name(&keysym_to_name[mid]));
-        }
-    }
+    ssize_t index = find_keysym_index(ks);
+    if (index != -1)
+        return snprintf(buffer, size, "%s", get_name(&keysym_to_name[index]));
 
     /* Unnamed Unicode codepoint. */
-    if (ks >= 0x01000100 && ks <= 0x0110ffff) {
-        const int width = (ks & 0xff0000UL) ? 8 : 4;
-        return snprintf(buffer, size, "U%0*lX", width, ks & 0xffffffUL);
-    }
+    if (ks >= XKB_KEYSYM_UNICODE_MIN && ks <= XKB_KEYSYM_UNICODE_MAX)
+        return get_unicode_name(ks, buffer, size);
 
     /* Unnamed, non-Unicode, symbol (shouldn't generally happen). */
     return snprintf(buffer, size, "0x%08x", ks);
+}
+
+bool
+xkb_keysym_is_assigned(xkb_keysym_t ks)
+{
+    return (XKB_KEYSYM_UNICODE_MIN <= ks && ks <= XKB_KEYSYM_UNICODE_MAX) ||
+           find_keysym_index(ks) != -1;
+}
+
+struct xkb_keysym_iterator {
+    bool explicit;       /* If true, traverse only explicitly named keysyms */
+    int32_t index;       /* Current index in `keysym_to_name` */
+    xkb_keysym_t keysym; /* Current keysym */
+};
+
+struct xkb_keysym_iterator*
+xkb_keysym_iterator_new(bool iterate_only_explicit_keysyms)
+{
+    struct xkb_keysym_iterator* iter = calloc(1, sizeof(*iter));
+    iter->explicit = iterate_only_explicit_keysyms;
+    iter->index = -1;
+    iter->keysym = XKB_KEYSYM_UNICODE_MAX;
+    return iter;
+}
+
+struct xkb_keysym_iterator*
+xkb_keysym_iterator_unref(struct xkb_keysym_iterator *iter)
+{
+    free(iter);
+    return NULL;
+}
+
+xkb_keysym_t
+xkb_keysym_iterator_get_keysym(struct xkb_keysym_iterator *iter)
+{
+    return iter->keysym;
+}
+
+bool
+xkb_keysym_iterator_is_explicitly_named(struct xkb_keysym_iterator *iter)
+{
+    return iter->index >= 0 &&
+           iter->index < (int32_t)ARRAY_SIZE(keysym_to_name) &&
+           (iter->explicit ||
+            iter->keysym == keysym_to_name[iter->index].keysym);
+}
+
+int
+xkb_keysym_iterator_get_name(struct xkb_keysym_iterator *iter,
+                             char *buffer, size_t size)
+{
+    if (iter->index < 0 || iter->index >= (int32_t)ARRAY_SIZE(keysym_to_name))
+        return -1;
+    if (iter->explicit || iter->keysym == keysym_to_name[iter->index].keysym)
+        return snprintf(buffer, size, "%s",
+                        get_name(&keysym_to_name[iter->index]));
+    return get_unicode_name(iter->keysym, buffer, size);
+}
+
+/* Iterate over the *assigned* keysyms.
+ *
+ * Use:
+ *
+ * ```c
+ * struct xkb_keysym_iterator *iter = xkb_keysym_iterator_new(true);
+ * while (xkb_keysym_iterator_next(iter)) {
+ *   ...
+ * }
+ * iter = xkb_keysym_iterator_unref(iter);
+ * ```
+ */
+bool
+xkb_keysym_iterator_next(struct xkb_keysym_iterator *iter)
+{
+    if (iter->index >= (int32_t)ARRAY_SIZE(keysym_to_name) - 1)
+        return false;
+
+    /* Next keysym */
+    if (iter->explicit || iter->keysym >= XKB_KEYSYM_UNICODE_MAX ||
+        keysym_to_name[iter->index + 1].keysym < XKB_KEYSYM_UNICODE_MIN) {
+        /* Explicitly named keysyms only */
+        iter->keysym = keysym_to_name[++iter->index].keysym;
+        assert(iter->explicit ||
+               iter->keysym <= XKB_KEYSYM_UNICODE_MIN ||
+               iter->keysym >= XKB_KEYSYM_UNICODE_MAX);
+    } else {
+        /* Unicode keysyms
+         * NOTE: Unicode keysyms are within keysym_to_name keysyms range. */
+        if (iter->keysym >= keysym_to_name[iter->index].keysym)
+            iter->index++;
+        if (iter->keysym >= XKB_KEYSYM_UNICODE_MIN) {
+            /* Continue Unicode keysyms */
+            iter->keysym++;
+        } else {
+            /* Start Unicode keysyms */
+            iter->keysym = XKB_KEYSYM_UNICODE_MIN;
+        }
+    }
+    return true;
 }
 
 /*
@@ -143,16 +270,20 @@ xkb_keysym_from_name(const char *name, enum xkb_keysym_flags flags)
     * Find the correct keysym for case-insensitive match.
     *
     * The name_to_keysym table is sorted by istrcmp(). So the binary
-    * search may return _any_ of all possible case-insensitive duplicates. This
-    * code searches the entry, all previous and all next entries that match by
-    * case-insensitive comparison and returns the "best" case-insensitive
-    * match.
+    * search may return _any_ of all possible case-insensitive duplicates. The
+    * duplicates are sorted so that the "best" case-insensitive match comes
+    * last. So the code searches the entry and all next entries that match by
+    * case-insensitive comparison and returns the "best" case-insensitive match.
     *
-    * The "best" case-insensitive match is the lower-case keysym which we find
-    * with the help of xkb_keysym_is_lower(). The only keysyms that only differ
-    * by letter-case are keysyms that are available as lower-case and
-    * upper-case variant (like KEY_a and KEY_A). So returning the first
-    * lower-case match is enough in this case.
+    * The "best" case-insensitive match is the lower-case keysym name. Most
+    * keysyms names that only differ by letter-case are keysyms that are
+    * available as “small” and “big” variants. For example:
+    *
+    * - Bicameral scripts: Lower-case and upper-case variants,
+    *   e.g. KEY_a and KEY_A.
+    * - Non-bicameral scripts: e.g. KEY_kana_a and KEY_kana_A.
+    *
+    * There are some exceptions, e.g. `XF86Screensaver` and `XF86ScreenSaver`.
     */
     else {
         int32_t lo = 0, hi = ARRAY_SIZE(name_to_keysym) - 1;
@@ -169,26 +300,14 @@ xkb_keysym_from_name(const char *name, enum xkb_keysym_flags flags)
             }
         }
         if (entry) {
-            const struct name_keysym *iter, *last;
-
-            if (icase && xkb_keysym_is_lower(entry->keysym))
-                return entry->keysym;
-
-            for (iter = entry - 1; iter >= name_to_keysym; --iter) {
-                if (istrcmp(get_name(iter), get_name(entry)) != 0)
-                    break;
-                if (xkb_keysym_is_lower(iter->keysym))
-                    return iter->keysym;
+            const struct name_keysym *last;
+            last = name_to_keysym + ARRAY_SIZE(name_to_keysym) - 1;
+            /* Keep going until we reach end of array
+             * or non case-insensitve match */
+            while (entry < last &&
+                   istrcmp(get_name(entry + 1), get_name(entry)) == 0) {
+                entry++;
             }
-
-            last = name_to_keysym + ARRAY_SIZE(name_to_keysym);
-            for (iter = entry + 1; iter < last; ++iter) {
-                if (istrcmp(get_name(iter), get_name(entry)) != 0)
-                    break;
-                if (xkb_keysym_is_lower(iter->keysym))
-                    return iter->keysym;
-            }
-
             return entry->keysym;
         }
     }
@@ -203,7 +322,7 @@ xkb_keysym_from_name(const char *name, enum xkb_keysym_flags flags)
             return (xkb_keysym_t) val;
         if (val > 0x10ffff)
             return XKB_KEY_NoSymbol;
-        return (xkb_keysym_t) val | 0x01000000;
+        return (xkb_keysym_t) val | XKB_KEYSYM_UNICODE_OFFSET;
     }
     else if (name[0] == '0' && (name[1] == 'x' || (icase && name[1] == 'X'))) {
         if (!parse_keysym_hex(&name[2], &val))
@@ -243,8 +362,7 @@ xkb_keysym_is_modifier(xkb_keysym_t keysym)
 {
     return
         (keysym >= XKB_KEY_Shift_L && keysym <= XKB_KEY_Hyper_R) ||
-        /* libX11 only goes upto XKB_KEY_ISO_Level5_Lock. */
-        (keysym >= XKB_KEY_ISO_Lock && keysym <= XKB_KEY_ISO_Last_Group_Lock) ||
+        (keysym >= XKB_KEY_ISO_Lock && keysym <= XKB_KEY_ISO_Level5_Lock) ||
         keysym == XKB_KEY_Mode_switch ||
         keysym == XKB_KEY_Num_Lock;
 }
@@ -492,8 +610,6 @@ UCSConvertCase(uint32_t code, xkb_keysym_t *lower, xkb_keysym_t *upper)
             *upper = 0x0178;
         else if (code == 0x00b5)      /* micro sign */
             *upper = 0x039c;
-        else if (code == 0x00df)      /* ssharp */
-            *upper = 0x1e9e;
 	return;
     }
 
@@ -670,17 +786,17 @@ UCSConvertCase(uint32_t code, xkb_keysym_t *lower, xkb_keysym_t *upper)
 static void
 XConvertCase(xkb_keysym_t sym, xkb_keysym_t *lower, xkb_keysym_t *upper)
 {
-    /* Latin 1 keysym */
-    if (sym < 0x100) {
+    /* Latin 1 keysym (first part: fast path) */
+    if (sym < 0xb5) {
         UCSConvertCase(sym, lower, upper);
 	return;
     }
 
     /* Unicode keysym */
-    if ((sym & 0xff000000) == 0x01000000) {
+    if ((sym & 0xff000000) == XKB_KEYSYM_UNICODE_OFFSET) {
         UCSConvertCase((sym & 0x00ffffff), lower, upper);
-        *upper |= 0x01000000;
-        *lower |= 0x01000000;
+        *upper |= XKB_KEYSYM_UNICODE_OFFSET;
+        *lower |= XKB_KEYSYM_UNICODE_OFFSET;
         return;
     }
 
@@ -690,6 +806,14 @@ XConvertCase(xkb_keysym_t sym, xkb_keysym_t *lower, xkb_keysym_t *upper)
     *upper = sym;
 
     switch(sym >> 8) {
+    case 0: /* Latin 1 (second part) */
+    if (sym == XKB_KEY_mu)
+        *upper = XKB_KEY_Greek_MU;
+    else if (sym == XKB_KEY_ydiaeresis)
+        *upper = XKB_KEY_Ydiaeresis;
+    else
+        UCSConvertCase(sym, lower, upper);
+    break;
     case 1: /* Latin 2 */
 	/* Assume the KeySym is a legal value (ignore discontinuities) */
 	if (sym == XKB_KEY_Aogonek)

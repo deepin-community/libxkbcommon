@@ -31,9 +31,146 @@
 
 #define DATA_PATH "keymaps/stringcomp.data"
 
+static bool
+test_encodings(struct xkb_context *ctx)
+{
+    struct xkb_keymap *keymap;
+
+    /* Accept UTF-8 encoded BOM (U+FEFF) */
+    const char utf8_with_bom[] =
+        "\xef\xbb\xbfxkb_keymap {"
+        "  xkb_keycodes { include \"evdev\" };"
+        "  xkb_types { include \"complete\" };"
+        "  xkb_compat { include \"complete\" };"
+        "  xkb_symbols { include \"pc\" };"
+        "};";
+    keymap = test_compile_buffer(ctx, utf8_with_bom, sizeof(utf8_with_bom));
+    assert(keymap);
+    xkb_keymap_unref(keymap);
+
+    /* Reject UTF-16LE encoded string */
+    const char utf16_le[] =
+        "x\0k\0b\0_\0k\0e\0y\0m\0a\0p\0 \0{\0\n\0"
+        " \0 \0x\0k\0b\0_\0k\0e\0y\0c\0o\0d\0e\0s\0 \0{\0 \0i\0n\0c\0l\0u\0d\0e\0 \0\"\0e\0v\0d\0e\0v\0\"\0 \0}\0;\0\n\0"
+        " \0 \0x\0k\0b\0_\0t\0y\0p\0e\0s\0 \0{\0 \0i\0n\0c\0l\0u\0d\0e\0 \0\"\0c\0o\0m\0p\0l\0e\0t\0e\0\"\0 \0}\0;\0\n\0"
+        " \0 \0x\0k\0b\0_\0c\0o\0m\0p\0a\0t\0 \0{\0 \0i\0n\0c\0l\0u\0d\0e\0 \0\"\0c\0o\0m\0p\0l\0e\0t\0e\0\"\0 \0}\0;\0\n\0"
+        " \0 \0x\0k\0b\0_\0s\0y\0m\0b\0o\0l\0s\0 \0{\0 \0i\0n\0c\0l\0u\0d\0e\0 \0\"\0p\0c\0\"\0 \0}\0;\0\n\0"
+        "}\0;\0";
+    keymap = test_compile_buffer(ctx, utf16_le, sizeof(utf16_le));
+    assert(!keymap);
+
+    /* Reject UTF-16LE with BOM encoded string */
+    const char utf16_le_with_bom[] =
+        "\xff\xfex\0k\0b\0_\0k\0e\0y\0m\0a\0p\0 \0{\0\n\0"
+        " \0 \0x\0k\0b\0_\0k\0e\0y\0c\0o\0d\0e\0s\0 \0{\0 \0i\0n\0c\0l\0u\0d\0e\0 \0\"\0e\0v\0d\0e\0v\0\"\0 \0}\0;\0\n\0"
+        " \0 \0x\0k\0b\0_\0t\0y\0p\0e\0s\0 \0{\0 \0i\0n\0c\0l\0u\0d\0e\0 \0\"\0c\0o\0m\0p\0l\0e\0t\0e\0\"\0 \0}\0;\0\n\0"
+        " \0 \0x\0k\0b\0_\0c\0o\0m\0p\0a\0t\0 \0{\0 \0i\0n\0c\0l\0u\0d\0e\0 \0\"\0c\0o\0m\0p\0l\0e\0t\0e\0\"\0 \0}\0;\0\n\0"
+        " \0 \0x\0k\0b\0_\0s\0y\0m\0b\0o\0l\0s\0 \0{\0 \0i\0n\0c\0l\0u\0d\0e\0 \0\"\0p\0c\0\"\0 \0}\0;\0\n\0"
+        "}\0;\0";
+    keymap = test_compile_buffer(ctx, utf16_le_with_bom, sizeof(utf16_le_with_bom));
+    assert(!keymap);
+
+    /* Reject UTF-16BE encoded string */
+    const char utf16_be[] =
+        "\0x\0k\0b\0_\0k\0e\0y\0m\0a\0p\0 \0{\0\n\0"
+        " \0 \0x\0k\0b\0_\0k\0e\0y\0c\0o\0d\0e\0s\0 \0{\0 \0i\0n\0c\0l\0u\0d\0e\0 \0\"\0e\0v\0d\0e\0v\0\"\0 \0}\0;\0\n\0"
+        " \0 \0x\0k\0b\0_\0t\0y\0p\0e\0s\0 \0{\0 \0i\0n\0c\0l\0u\0d\0e\0 \0\"\0c\0o\0m\0p\0l\0e\0t\0e\0\"\0 \0}\0;\0\n\0"
+        " \0 \0x\0k\0b\0_\0c\0o\0m\0p\0a\0t\0 \0{\0 \0i\0n\0c\0l\0u\0d\0e\0 \0\"\0c\0o\0m\0p\0l\0e\0t\0e\0\"\0 \0}\0;\0\n\0"
+        " \0 \0x\0k\0b\0_\0s\0y\0m\0b\0o\0l\0s\0 \0{\0 \0i\0n\0c\0l\0u\0d\0e\0 \0\"\0p\0c\0\"\0 \0}\0;\0\n\0"
+        "}\0;";
+    keymap = test_compile_buffer(ctx, utf16_be, sizeof(utf16_be));
+    assert(!keymap);
+
+    return true;
+}
+
+static void
+test_recursive(void)
+{
+    struct xkb_context *ctx = test_get_context(0);
+    struct xkb_keymap *keymap;
+
+    assert(ctx);
+
+    const char* const keymaps[] = {
+        /* Recursive keycodes */
+        "Keycodes: recursive",
+        "xkb_keymap {"
+        "  xkb_keycodes { include \"evdev+recursive\" };"
+        "  xkb_types { include \"complete\" };"
+        "  xkb_compat { include \"complete\" };"
+        "  xkb_symbols { include \"pc\" };"
+        "};",
+        "Keycodes: recursive(bar)",
+        "xkb_keymap {"
+        "  xkb_keycodes { include \"evdev+recursive(bar)\" };"
+        "  xkb_types { include \"complete\" };"
+        "  xkb_compat { include \"complete\" };"
+        "  xkb_symbols { include \"pc\" };"
+        "};",
+        /* Recursive key types */
+        "Key types: recursive",
+        "xkb_keymap {"
+        "  xkb_keycodes { include \"evdev\" };"
+        "  xkb_types { include \"recursive\" };"
+        "  xkb_compat { include \"complete\" };"
+        "  xkb_symbols { include \"pc\" };"
+        "};",
+        "Key types: recursive(bar)",
+        "xkb_keymap {"
+        "  xkb_keycodes { include \"evdev\" };"
+        "  xkb_types { include \"recursive(bar)\" };"
+        "  xkb_compat { include \"complete\" };"
+        "  xkb_symbols { include \"pc\" };"
+        "};",
+        /* Recursive compat */
+        "Compat: recursive",
+        "xkb_keymap {"
+        "  xkb_keycodes { include \"evdev\" };"
+        "  xkb_types { include \"recursive\" };"
+        "  xkb_compat { include \"complete\" };"
+        "  xkb_symbols { include \"pc\" };"
+        "};",
+        "Compat: recursive(bar)",
+        "xkb_keymap {"
+        "  xkb_keycodes { include \"evdev\" };"
+        "  xkb_types { include \"complete\" };"
+        "  xkb_compat { include \"recursive(bar)\" };"
+        "  xkb_symbols { include \"pc\" };"
+        "};",
+        /* Recursive symbols */
+        "Symbols: recursive",
+        "xkb_keymap {"
+        "  xkb_keycodes { include \"evdev\" };"
+        "  xkb_types { include \"complete\" };"
+        "  xkb_compat { include \"complete\" };"
+        "  xkb_symbols { include \"recursive\" };"
+        "};",
+        "Symbols: recursive(bar)",
+        "xkb_keymap {"
+        "  xkb_keycodes { include \"evdev\" };"
+        "  xkb_types { include \"complete\" };"
+        "  xkb_compat { include \"complete\" };"
+        "  xkb_symbols { include \"recursive(bar)\" };"
+        // "};"
+    };
+
+    int len = sizeof(keymaps) / sizeof(keymaps[0]);
+
+    for (int k = 0; k < len; k++) {
+        fprintf(stderr, "*** Recursive test: %s ***\n", keymaps[k++]);
+        keymap = test_compile_buffer(ctx, keymaps[k], strlen(keymaps[k]));
+        assert(!keymap);
+    }
+
+    xkb_context_unref(ctx);
+}
+
 int
 main(int argc, char *argv[])
 {
+    test_init();
+
     struct xkb_context *ctx = test_get_context(0);
     struct xkb_keymap *keymap;
     char *original, *dump;
@@ -78,6 +215,8 @@ main(int argc, char *argv[])
     keymap = test_compile_buffer(ctx, "", 0);
     assert(!keymap);
 
+    assert(test_encodings(ctx));
+
     /* Make sure we can recompile our output for a normal keymap from rules. */
     keymap = test_compile_rules(ctx, NULL, NULL,
                                 "ru,ca,de,us", ",multix,neo,intl", NULL);
@@ -91,6 +230,8 @@ main(int argc, char *argv[])
     free(dump);
 
     xkb_context_unref(ctx);
+
+    test_recursive();
 
     return 0;
 }

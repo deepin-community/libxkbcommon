@@ -55,6 +55,7 @@
 #include "action.h"
 #include "vmod.h"
 #include "include.h"
+#include "util-mem.h"
 
 enum si_field {
     SI_FIELD_VIRTUAL_MOD = (1 << 0),
@@ -86,6 +87,7 @@ typedef struct {
 typedef struct {
     char *name;
     int errorCount;
+    unsigned int include_depth;
     SymInterpInfo default_interp;
     darray(SymInterpInfo) interps;
     LedInfo default_led;
@@ -148,10 +150,12 @@ ReportLedNotArray(CompatInfo *info, LedInfo *ledi, const char *field)
 
 static void
 InitCompatInfo(CompatInfo *info, struct xkb_context *ctx,
+               unsigned int include_depth,
                ActionsInfo *actions, const struct xkb_mod_set *mods)
 {
     memset(info, 0, sizeof(*info));
     info->ctx = ctx;
+    info->include_depth = include_depth;
     info->actions = actions;
     info->mods = *mods;
     info->default_interp.merge = MERGE_OVERRIDE;
@@ -390,8 +394,7 @@ MergeIncludedCompatMaps(CompatInfo *into, CompatInfo *from,
     into->mods = from->mods;
 
     if (into->name == NULL) {
-        into->name = from->name;
-        from->name = NULL;
+        into->name = steal(&from->name);
     }
 
     if (darray_empty(into->interps)) {
@@ -430,9 +433,14 @@ HandleIncludeCompatMap(CompatInfo *info, IncludeStmt *include)
 {
     CompatInfo included;
 
-    InitCompatInfo(&included, info->ctx, info->actions, &info->mods);
-    included.name = include->stmt;
-    include->stmt = NULL;
+    if (ExceedsIncludeMaxDepth(info->ctx, info->include_depth)) {
+        info->errorCount += 10;
+        return false;
+    }
+
+    InitCompatInfo(&included, info->ctx, 0 /* unused */,
+                   info->actions, &info->mods);
+    included.name = steal(&include->stmt);
 
     for (IncludeStmt *stmt = include; stmt; stmt = stmt->next_incl) {
         CompatInfo next_incl;
@@ -445,7 +453,8 @@ HandleIncludeCompatMap(CompatInfo *info, IncludeStmt *include)
             return false;
         }
 
-        InitCompatInfo(&next_incl, info->ctx, info->actions, &included.mods);
+        InitCompatInfo(&next_incl, info->ctx, info->include_depth + 1,
+                       info->actions, &included.mods);
         next_incl.default_interp = info->default_interp;
         next_incl.default_interp.merge = stmt->merge;
         next_incl.default_led = info->default_led;
@@ -659,18 +668,18 @@ HandleInterpBody(CompatInfo *info, VarDef *def, SymInterpInfo *si)
     ExprDef *arrayNdx;
 
     for (; def; def = (VarDef *) def->common.next) {
-        if (def->name && def->name->expr.op == EXPR_FIELD_REF) {
-            log_err(info->ctx, XKB_LOG_MESSAGE_NO_ID,
-                    "Cannot set a global default value from within an interpret statement; "
-                    "Move statements to the global file scope\n");
-            ok = false;
-            continue;
-        }
-
         ok = ExprResolveLhs(info->ctx, def->name, &elem, &field, &arrayNdx);
         if (!ok)
             continue;
-
+        if (elem) {
+            log_err(info->ctx, XKB_LOG_MESSAGE_NO_ID,
+                    "Cannot set a global default value for \"%s\" element from "
+                    "within an interpret statement; "
+                    "Move assignment to \"%s.%s\" to the global file scope\n",
+                    elem, elem, field);
+            ok = false;
+            continue;
+        }
         ok = SetInterpField(info, si, field, arrayNdx, def->value);
     }
 
@@ -734,7 +743,7 @@ HandleLedMapDef(CompatInfo *info, LedMapDef *def, enum merge_mode merge)
         }
 
         if (elem) {
-            log_err(info->ctx, XKB_LOG_MESSAGE_NO_ID,
+            log_err(info->ctx, XKB_ERROR_GLOBAL_DEFAULTS_WRONG_SCOPE,
                     "Cannot set defaults for \"%s\" element in indicator map; "
                     "Assignment to %s.%s ignored\n", elem, elem, field);
             ok = false;
@@ -914,7 +923,7 @@ CompileCompatMap(XkbFile *file, struct xkb_keymap *keymap,
     if (!actions)
         return false;
 
-    InitCompatInfo(&info, keymap->ctx, actions, &keymap->mods);
+    InitCompatInfo(&info, keymap->ctx, 0, actions, &keymap->mods);
     info.default_interp.merge = merge;
     info.default_led.merge = merge;
 

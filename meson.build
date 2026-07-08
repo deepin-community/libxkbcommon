@@ -1,7 +1,7 @@
 project(
     'libxkbcommon',
     'c',
-    version: '1.6.0',
+    version: '1.7.0',
     default_options: [
         'c_std=c11',
         'warning_level=2',
@@ -145,7 +145,7 @@ configh_data.set('WIN32_LEAN_AND_MEAN', 1)
 # Supports -Wl,--version-script?
 have_version_script = cc.links(
     'int main(){}',
-    args: '-Wl,--version-script=' + meson.current_source_dir()/'xkbcommon.map',
+    args: '-Wl,--undefined-version,--version-script=' + meson.current_source_dir()/'xkbcommon.map',
     name: '-Wl,--version-script',
 )
 
@@ -228,6 +228,7 @@ libxkbcommon_sources = [
     'src/text.h',
     'src/utf8.c',
     'src/utf8.h',
+    'src/util-mem.h',
     'src/utils.c',
     'src/utils.h',
 ]
@@ -364,6 +365,7 @@ if get_option('enable-xkbregistry')
         'src/utils.c',
         'src/util-list.h',
         'src/util-list.c',
+        'src/util-mem.h',
     ]
     libxkbregistry_link_args = []
     libxkbregistry_link_deps = []
@@ -432,6 +434,7 @@ if build_tools
         link_with: libxkbcommon_tools_internal,
         dependencies: dep_libxkbcommon,
     )
+    configh_data.set10('HAVE_TOOLS', true)
 
     # Tool: xkbcli
     executable('xkbcli', 'tools/xkbcli.c',
@@ -460,6 +463,7 @@ if build_tools
                                        install: true,
                                        install_dir: dir_libexec)
     install_man('tools/xkbcli-compile-keymap.1')
+    configh_data.set10('HAVE_XKBCLI_COMPILE_KEYMAP', true)
     # The same tool again, but with access to some private APIs.
     executable('compile-keymap',
                'tools/compile-keymap.c',
@@ -470,12 +474,13 @@ if build_tools
                install: false)
 
     # Tool: compose
-    executable('compose',
-               'tools/compose.c',
+    executable('xkbcli-compile-compose',
+               'tools/compile-compose.c',
                dependencies: tools_dep,
-               include_directories: [include_directories('src', 'include')],
-               install: false)
-    configh_data.set10('HAVE_XKBCLI_COMPILE_KEYMAP', true)
+               install: true,
+               install_dir: dir_libexec)
+    install_man('tools/xkbcli-compile-compose.1')
+    configh_data.set10('HAVE_XKBCLI_COMPILE_COMPOSE', true)
 
     # Tool: how-to-type
     executable('xkbcli-how-to-type',
@@ -531,7 +536,7 @@ if build_tools
         wayland_protocols_dep = dependency('wayland-protocols', version: '>=1.12', required: false)
         wayland_scanner_dep = dependency('wayland-scanner', required: false, native: true)
         if not wayland_client_dep.found() or not wayland_protocols_dep.found() or not wayland_scanner_dep.found()
-            error('''The Wayland xkbcli programs require wayland-client >= 1.2.0, wayland-protocols >= 1.7 which were not found.
+            error('''The Wayland xkbcli programs require wayland-client and wayland-protocols which were not found.
 You can disable the Wayland xkbcli programs with -Denable-wayland=false.''')
         endif
 
@@ -582,6 +587,8 @@ You can disable the Wayland xkbcli programs with -Denable-wayland=false.''')
                dependencies: [tools_dep],
                include_directories: [include_directories('src', 'include', 'tools')],
                install: false)
+else
+    tools_dep = declare_dependency()
 endif
 
 
@@ -619,10 +626,12 @@ libxkbcommon_test_internal = static_library(
     'bench/bench.h',
     libxkbcommon_sources,
     include_directories: include_directories('src', 'include'),
+    c_args: ['-DENABLE_PRIVATE_APIS'],
 )
 test_dep = declare_dependency(
     include_directories: include_directories('src', 'include'),
     link_with: libxkbcommon_test_internal,
+    dependencies: [tools_dep],
 )
 if get_option('enable-x11')
     libxkbcommon_x11_test_internal = static_library(
@@ -646,14 +655,25 @@ if get_option('enable-x11')
         ],
     )
 endif
+# TODO: version range?
+keysyms_test_dep = [test_dep]
+keysyms_test_c_args = ['-DENABLE_PRIVATE_APIS']
+icu_dep = dependency('icu-uc', required: false)
+if icu_dep.found()
+    keysyms_test_dep += [icu_dep]
+    configh_data.set10('HAVE_ICU', true)
+endif
 test(
     'keysym',
-    executable('test-keysym', 'test/keysym.c', dependencies: test_dep),
+    executable('test-keysym', 'test/keysym.c', 'test/keysym.h',
+               dependencies: keysyms_test_dep,
+               c_args: keysyms_test_c_args),
     env: test_env,
 )
 test(
     'keymap',
-    executable('test-keymap', 'test/keymap.c', dependencies: test_dep),
+    executable('test-keymap', 'test/keymap.c', 'test/keysym.h',
+               dependencies: test_dep),
     env: test_env,
 )
 test(
@@ -753,11 +773,13 @@ if get_option('enable-x11')
         'x11',
         executable('test-x11', 'test/x11.c', dependencies: x11_test_dep),
         env: test_env,
+        is_parallel : false,
     )
     test(
         'x11comp',
         executable('test-x11comp', 'test/x11comp.c', dependencies: x11_test_dep),
         env: test_env,
+        is_parallel : false,
     )
 endif
 if get_option('enable-xkbregistry')
@@ -865,6 +887,8 @@ You can disable the documentation with -Denable-docs=false.''')
     doxygen_input = [
         'README.md',
         'doc/diagrams/xkb-configuration.dot',
+        'doc/diagrams/xkb-keymap-components.dot',
+        'doc/diagrams/xkb-types-explanation.dot',
         'doc/doxygen-extra.css',
         'doc/introduction-to-xkb.md',
         'doc/quick-guide.md',

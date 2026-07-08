@@ -60,6 +60,7 @@
 #include "vmod.h"
 #include "include.h"
 #include "keysym.h"
+#include "util-mem.h"
 
 
 enum key_repeat {
@@ -175,6 +176,7 @@ typedef struct {
 typedef struct {
     char *name;         /* e.g. pc+us+inet(evdev) */
     int errorCount;
+    unsigned int include_depth;
     enum merge_mode merge;
     xkb_layout_index_t explicit_group;
     darray(KeyInfo) keys;
@@ -191,10 +193,12 @@ typedef struct {
 
 static void
 InitSymbolsInfo(SymbolsInfo *info, const struct xkb_keymap *keymap,
+                unsigned int include_depth,
                 ActionsInfo *actions, const struct xkb_mod_set *mods)
 {
     memset(info, 0, sizeof(*info));
     info->ctx = keymap->ctx;
+    info->include_depth = include_depth;
     info->keymap = keymap;
     info->merge = MERGE_OVERRIDE;
     InitKeyInfo(keymap->ctx, &info->default_key);
@@ -515,8 +519,7 @@ MergeIncludedSymbols(SymbolsInfo *into, SymbolsInfo *from,
     into->mods = from->mods;
 
     if (into->name == NULL) {
-        into->name = from->name;
-        from->name = NULL;
+        into->name = steal(&from->name);
     }
 
     group_names_in_both = MIN(darray_size(into->group_names),
@@ -569,9 +572,14 @@ HandleIncludeSymbols(SymbolsInfo *info, IncludeStmt *include)
 {
     SymbolsInfo included;
 
-    InitSymbolsInfo(&included, info->keymap, info->actions, &info->mods);
-    included.name = include->stmt;
-    include->stmt = NULL;
+    if (ExceedsIncludeMaxDepth(info->ctx, info->include_depth)) {
+        info->errorCount += 10;
+        return false;
+    }
+
+    InitSymbolsInfo(&included, info->keymap, 0 /* unused */,
+                    info->actions, &info->mods);
+    included.name = steal(&include->stmt);
 
     for (IncludeStmt *stmt = include; stmt; stmt = stmt->next_incl) {
         SymbolsInfo next_incl;
@@ -584,8 +592,8 @@ HandleIncludeSymbols(SymbolsInfo *info, IncludeStmt *include)
             return false;
         }
 
-        InitSymbolsInfo(&next_incl, info->keymap, info->actions,
-                        &included.mods);
+        InitSymbolsInfo(&next_incl, info->keymap, info->include_depth + 1,
+                        info->actions, &included.mods);
         if (stmt->modifier) {
             next_incl.explicit_group = atoi(stmt->modifier) - 1;
             if (next_incl.explicit_group >= XKB_MAX_GROUPS) {
@@ -1086,14 +1094,6 @@ HandleSymbolsBody(SymbolsInfo *info, VarDef *def, KeyInfo *keyi)
     ExprDef *arrayNdx;
 
     for (; def; def = (VarDef *) def->common.next) {
-        if (def->name && def->name->expr.op == EXPR_FIELD_REF) {
-            log_err(info->ctx,
-                    XKB_ERROR_WRONG_SCOPE,
-                    "Cannot set a global default value from within a key statement; "
-                    "Move statements to the global file scope\n");
-            continue;
-        }
-
         if (!def->name) {
             if (!def->value || def->value->expr.op == EXPR_KEYSYM_LIST)
                 field = "symbols";
@@ -1104,6 +1104,15 @@ HandleSymbolsBody(SymbolsInfo *info, VarDef *def, KeyInfo *keyi)
         else {
             ok = ExprResolveLhs(info->ctx, def->name, &elem, &field,
                                 &arrayNdx);
+            if (ok && elem) {
+                log_err(info->ctx, XKB_ERROR_GLOBAL_DEFAULTS_WRONG_SCOPE,
+                        "Cannot set global defaults for \"%s\" element within "
+                        "a key statement: move statements to the global file "
+                        "scope. Assignment to \"%s.%s\" ignored.\n",
+                        elem, elem, field);
+                ok = false;
+                continue;
+            }
         }
 
         if (ok)
@@ -1638,7 +1647,7 @@ CompileSymbols(XkbFile *file, struct xkb_keymap *keymap,
     if (!actions)
         return false;
 
-    InitSymbolsInfo(&info, keymap, actions, &keymap->mods);
+    InitSymbolsInfo(&info, keymap, 0, actions, &keymap->mods);
     info.default_key.merge = merge;
 
     HandleSymbolsFile(&info, file, merge);

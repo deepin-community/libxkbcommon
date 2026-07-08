@@ -29,6 +29,8 @@
 int
 main(void)
 {
+    test_init();
+
     struct xkb_context *ctx = test_get_context(0);
     struct xkb_keymap *keymap;
 
@@ -299,7 +301,7 @@ main(void)
                         KEY_RIGHTALT,    DOWN,  XKB_KEY_ISO_Level5_Shift,  NEXT,
                         /* XXX: xkeyboard-config is borked when de(neo) is
                          *      not the first group - not our fault. We test
-                         *      Level5 seprately below with only de(neo). */
+                         *      Level5 separately below with only de(neo). */
                         /* KEY_5,           BOTH,  XKB_KEY_periodcentered,    NEXT, */
                         /* KEY_E,           BOTH,  XKB_KEY_Up,                NEXT, */
                         /* KEY_SPACE,       BOTH,  XKB_KEY_KP_0,              NEXT, */

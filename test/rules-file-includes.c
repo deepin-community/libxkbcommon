@@ -93,6 +93,8 @@ main(int argc, char *argv[])
 {
     struct xkb_context *ctx;
 
+    test_init();
+
     setenv("XKB_CONFIG_ROOT", TEST_XKB_CONFIG_ROOT, 1);
 
     ctx = test_get_context(0);
@@ -158,6 +160,12 @@ main(int argc, char *argv[])
         .compat = "default_compat", .symbols = "my_symbols",
     };
     assert(test_rules(ctx, &test6));
+
+    struct test_data test7 = {
+      .rules = "inc-no-newline",
+      .should_fail = true,
+    };
+    assert(test_rules(ctx, &test7));
 
     xkb_context_unref(ctx);
     return 0;
