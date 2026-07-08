@@ -40,6 +40,8 @@ test_file(struct xkb_context *ctx, const char *path_rel)
 int
 main(void)
 {
+    test_init();
+
     struct xkb_context *ctx = test_get_context(0);
 
     assert(test_file(ctx, "keymaps/basic.xkb"));
@@ -54,6 +56,9 @@ main(void)
     assert(!test_file(ctx, "keymaps/bad.xkb"));
     assert(!test_file(ctx, "keymaps/syntax-error.xkb"));
     assert(!test_file(ctx, "keymaps/syntax-error2.xkb"));
+    assert(!test_file(ctx, "keymaps/empty-symbol-decl.xkb"));
+    assert(!test_file(ctx, "keymaps/invalid-qualified-type-field.xkb"));
+    assert(!test_file(ctx, "keymaps/invalid-qualified-symbols-field.xkb"));
     assert(!test_file(ctx, "does not exist"));
 
     /* Test response to invalid flags and formats. */

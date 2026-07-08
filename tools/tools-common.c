@@ -32,7 +32,6 @@
 
 #include "config.h"
 
-#include <ctype.h>
 #include <errno.h>
 #include <limits.h>
 #include <fcntl.h>
@@ -49,6 +48,9 @@
 #endif
 
 #include "tools-common.h"
+#include "src/utils.h"
+#include "src/keysym.h"
+#include "src/compose/parser.h"
 
 static void
 print_keycode(struct xkb_keymap *keymap, const char* prefix,
@@ -143,7 +145,8 @@ print_keys_modmaps(struct xkb_keymap *keymap) {
 #endif
 
 void
-tools_print_keycode_state(struct xkb_state *state,
+tools_print_keycode_state(const char *prefix,
+                          struct xkb_state *state,
                           struct xkb_compose_state *compose_state,
                           xkb_keycode_t keycode,
                           enum xkb_consumed_mode consumed_mode,
@@ -154,7 +157,7 @@ tools_print_keycode_state(struct xkb_state *state,
     xkb_keysym_t sym;
     const xkb_keysym_t *syms;
     int nsyms;
-    char s[16];
+    char s[MAX(XKB_COMPOSE_MAX_STRING_SIZE, XKB_KEYSYM_NAME_MAX_SIZE)];
     xkb_layout_index_t layout;
     enum xkb_compose_status status;
 
@@ -182,6 +185,9 @@ tools_print_keycode_state(struct xkb_state *state,
         syms = &sym;
     }
 
+    if (prefix)
+        printf("%s", prefix);
+
     print_keycode(keymap, "keycode [ ", keycode, " ] ");
 
 #ifdef ENABLE_PRIVATE_APIS
@@ -193,7 +199,7 @@ tools_print_keycode_state(struct xkb_state *state,
     printf("keysyms [ ");
     for (int i = 0; i < nsyms; i++) {
         xkb_keysym_get_name(syms[i], s, sizeof(s));
-        printf("%-*s ", (int) sizeof(s), s);
+        printf("%-*s ", XKB_KEYSYM_NAME_MAX_SIZE, s);
     }
     printf("] ");
 

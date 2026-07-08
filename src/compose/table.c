@@ -176,35 +176,27 @@ xkb_compose_table_new_from_locale(struct xkb_context *ctx,
         return NULL;
 
     path = get_xcomposefile_path(ctx);
-    if (path) {
-        file = fopen(path, "rb");
-        if (file)
-            goto found_path;
-    }
+    file = open_file(path);
+    if (file)
+        goto found_path;
     free(path);
 
     path = get_xdg_xcompose_file_path(ctx);
-    if (path) {
-        file = fopen(path, "rb");
-        if (file)
-            goto found_path;
-    }
+    file = open_file(path);
+    if (file)
+        goto found_path;
     free(path);
 
     path = get_home_xcompose_file_path(ctx);
-    if (path) {
-        file = fopen(path, "rb");
-        if (file)
-            goto found_path;
-    }
+    file = open_file(path);
+    if (file)
+        goto found_path;
     free(path);
 
     path = get_locale_compose_file_path(ctx, table->locale);
-    if (path) {
-        file = fopen(path, "rb");
-        if (file)
-            goto found_path;
-    }
+    file = open_file(path);
+    if (file)
+        goto found_path;
     free(path);
 
     log_err(ctx, XKB_LOG_MESSAGE_NO_ID,
@@ -275,7 +267,6 @@ XKB_EXPORT struct xkb_compose_table_iterator *
 xkb_compose_table_iterator_new(struct xkb_compose_table *table)
 {
     struct xkb_compose_table_iterator *iter;
-    struct xkb_compose_table_iterator_cursor cursor;
     xkb_keysym_t *sequence;
 
     iter = calloc(1, sizeof(*iter));
@@ -292,10 +283,15 @@ xkb_compose_table_iterator_new(struct xkb_compose_table *table)
     iter->entry.sequence_length = 0;
 
     darray_init(iter->cursors);
-    cursor.direction = NODE_LEFT;
-    /* Offset 0 is a dummy null entry, skip it. */
-    cursor.node_offset = 1;
-    darray_append(iter->cursors, cursor);
+    /* Add first cursor only if there is at least one non-dummy node */
+    if (darray_size(iter->table->nodes) > 1) {
+        const struct xkb_compose_table_iterator_cursor cursor = {
+            .direction = NODE_LEFT,
+            /* Offset 0 is a dummy null entry, skip it. */
+            .node_offset = 1
+        };
+        darray_append(iter->cursors, cursor);
+    }
 
     return iter;
 }

@@ -31,6 +31,7 @@
 #include "vmod.h"
 #include "expr.h"
 #include "include.h"
+#include "util-mem.h"
 
 enum type_field {
     TYPE_FIELD_MASK = (1 << 0),
@@ -53,6 +54,7 @@ typedef struct {
 typedef struct {
     char *name;
     int errorCount;
+    unsigned int include_depth;
 
     darray(KeyTypeInfo) types;
     struct xkb_mod_set mods;
@@ -100,10 +102,12 @@ ReportTypeBadType(KeyTypesInfo *info, xkb_message_code_t code,
 
 static void
 InitKeyTypesInfo(KeyTypesInfo *info, struct xkb_context *ctx,
+                 unsigned int include_depth,
                  const struct xkb_mod_set *mods)
 {
     memset(info, 0, sizeof(*info));
     info->ctx = ctx;
+    info->include_depth = include_depth;
     info->mods = *mods;
 }
 
@@ -118,6 +122,9 @@ static void
 ClearKeyTypesInfo(KeyTypesInfo *info)
 {
     free(info->name);
+    KeyTypeInfo *type;
+    darray_foreach(type, info->types)
+        ClearKeyTypeInfo(type);
     darray_free(info->types);
 }
 
@@ -186,12 +193,12 @@ MergeIncludedKeyTypes(KeyTypesInfo *into, KeyTypesInfo *from,
     into->mods = from->mods;
 
     if (into->name == NULL) {
-        into->name = from->name;
-        from->name = NULL;
+        into->name = steal(&from->name);
     }
 
     if (darray_empty(into->types)) {
         into->types = from->types;
+        /* Types stolen via shallow copy, so reinitialize the array */
         darray_init(from->types);
     }
     else {
@@ -201,6 +208,9 @@ MergeIncludedKeyTypes(KeyTypesInfo *into, KeyTypesInfo *from,
             if (!AddKeyType(into, type, false))
                 into->errorCount++;
         }
+        /* Types were either shallow copied or reinitialized individually
+           in `AddKeyType`, so we only need to free the array */
+        darray_free(from->types);
     }
 }
 
@@ -212,9 +222,13 @@ HandleIncludeKeyTypes(KeyTypesInfo *info, IncludeStmt *include)
 {
     KeyTypesInfo included;
 
-    InitKeyTypesInfo(&included, info->ctx, &info->mods);
-    included.name = include->stmt;
-    include->stmt = NULL;
+    if (ExceedsIncludeMaxDepth(info->ctx, info->include_depth)) {
+        info->errorCount += 10;
+        return false;
+    }
+
+    InitKeyTypesInfo(&included, info->ctx, 0 /* unused */, &info->mods);
+    included.name = steal(&include->stmt);
 
     for (IncludeStmt *stmt = include; stmt; stmt = stmt->next_incl) {
         KeyTypesInfo next_incl;
@@ -227,7 +241,8 @@ HandleIncludeKeyTypes(KeyTypesInfo *info, IncludeStmt *include)
             return false;
         }
 
-        InitKeyTypesInfo(&next_incl, info->ctx, &included.mods);
+        InitKeyTypesInfo(&next_incl, info->ctx, info->include_depth + 1,
+                         &included.mods);
 
         HandleKeyTypesFile(&next_incl, file, stmt->merge);
 
@@ -603,11 +618,21 @@ HandleKeyTypeBody(KeyTypesInfo *info, VarDef *def, KeyTypeInfo *type)
         if (!ok)
             continue;
 
-        if (elem && istreq(elem, "type")) {
-            log_err(info->ctx,
-                    XKB_ERROR_INVALID_SET_DEFAULT_STATEMENT,
-                    "Support for changing the default type has been removed; "
-                    "Statement ignored\n");
+        if (elem) {
+            if (istreq(elem, "type")) {
+                log_err(info->ctx,
+                        XKB_ERROR_INVALID_SET_DEFAULT_STATEMENT,
+                        "Support for changing the default type has been removed; "
+                        "Statement \"%s.%s\" ignored.\n", elem, field);
+            }
+            else {
+                log_err(info->ctx, XKB_ERROR_GLOBAL_DEFAULTS_WRONG_SCOPE,
+                        "Cannot set global defaults for \"%s\" element within "
+                        "a key type statement: move statements to the global "
+                        "file scope. Assignment to \"%s.%s\" ignored.\n",
+                        elem, elem, field);
+                ok = false;
+            }
             continue;
         }
 
@@ -630,16 +655,16 @@ HandleKeyTypeDef(KeyTypesInfo *info, KeyTypeDef *def, enum merge_mode merge)
         .level_names = darray_new(),
     };
 
-    if (!HandleKeyTypeBody(info, def->body, &type)) {
+    if (!HandleKeyTypeBody(info, def->body, &type) ||
+        !AddKeyType(info, &type, true))
+    {
         info->errorCount++;
+        ClearKeyTypeInfo(&type);
         return false;
     }
 
-    if (!AddKeyType(info, &type, true)) {
-        info->errorCount++;
-        return false;
-    }
-
+    /* Type has been either stolen via shallow copy or reinitialized in
+       `AddKeyType`: no need to free the arrays */
     return true;
 }
 
@@ -747,7 +772,7 @@ CompileKeyTypes(XkbFile *file, struct xkb_keymap *keymap,
 {
     KeyTypesInfo info;
 
-    InitKeyTypesInfo(&info, keymap->ctx, &keymap->mods);
+    InitKeyTypesInfo(&info, keymap->ctx, 0, &keymap->mods);
 
     HandleKeyTypesFile(&info, file, merge);
     if (info.errorCount != 0)

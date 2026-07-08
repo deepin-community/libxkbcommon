@@ -23,9 +23,96 @@
 #include "config.h"
 
 #include <locale.h>
+#include <stdbool.h>
+#if HAVE_ICU
+#include <unicode/uchar.h>
+#endif
 
 #include "test.h"
-#include "keysym.h" /* For unexported is_lower/upper/keypad() */
+#include "src/keysym.h" /* For unexported is_lower/upper/keypad() */
+#include "test/keysym.h"
+
+/* Explicit ordered list of modifier keysyms */
+static const xkb_keysym_t modifier_keysyms[] = {
+    XKB_KEY_ISO_Lock,
+    XKB_KEY_ISO_Level2_Latch,
+    XKB_KEY_ISO_Level3_Shift,
+    XKB_KEY_ISO_Level3_Latch,
+    XKB_KEY_ISO_Level3_Lock,
+    /* XKB_KEY_ISO_Group_Shift == XKB_KEY_Mode_switch */
+    XKB_KEY_ISO_Group_Latch,
+    XKB_KEY_ISO_Group_Lock,
+    XKB_KEY_ISO_Next_Group,
+    XKB_KEY_ISO_Next_Group_Lock,
+    XKB_KEY_ISO_Prev_Group,
+    XKB_KEY_ISO_Prev_Group_Lock,
+    XKB_KEY_ISO_First_Group,
+    XKB_KEY_ISO_First_Group_Lock,
+    XKB_KEY_ISO_Last_Group,
+    XKB_KEY_ISO_Last_Group_Lock,
+    0xfe10, /* Currently unassigned, but xkb_keysym_is_modifier returns true */
+    XKB_KEY_ISO_Level5_Shift,
+    XKB_KEY_ISO_Level5_Latch,
+    XKB_KEY_ISO_Level5_Lock,
+
+    XKB_KEY_Mode_switch,
+    XKB_KEY_Num_Lock,
+
+    XKB_KEY_Shift_L,
+    XKB_KEY_Shift_R,
+    XKB_KEY_Control_L,
+    XKB_KEY_Control_R,
+    XKB_KEY_Caps_Lock,
+    XKB_KEY_Shift_Lock,
+
+    XKB_KEY_Meta_L,
+    XKB_KEY_Meta_R,
+    XKB_KEY_Alt_L,
+    XKB_KEY_Alt_R,
+    XKB_KEY_Super_L,
+    XKB_KEY_Super_R,
+    XKB_KEY_Hyper_L,
+    XKB_KEY_Hyper_R
+};
+
+#define MIN_MODIFIER_KEYSYM modifier_keysyms[0]
+#define MAX_MODIFIER_KEYSYM modifier_keysyms[ARRAY_SIZE(modifier_keysyms) - 1]
+
+static void
+test_modifiers_table(void)
+{
+    xkb_keysym_t ks = XKB_KEY_NoSymbol;
+
+    /* Ensure ordered array */
+    for (size_t k = 0; k < ARRAY_SIZE(modifier_keysyms); k++) {
+        assert_printf(ks < modifier_keysyms[k],
+                      "modifier_keysyms[] is not ordered: 0x%04"PRIx32">=0x%04"PRIx32"\n",
+                      ks, modifier_keysyms[k]);
+        ks = modifier_keysyms[k];
+    }
+
+    /* Unassigned keysym */
+    assert(!xkb_keysym_is_assigned(0xfe10));
+}
+
+static bool
+test_modifier(xkb_keysym_t ks)
+{
+    if (ks < MIN_MODIFIER_KEYSYM || ks > MAX_MODIFIER_KEYSYM)
+        return false;
+    for (size_t k = 0; k < ARRAY_SIZE(modifier_keysyms); k++) {
+        if (ks == modifier_keysyms[k])
+            return true;
+    }
+    return false;
+}
+
+static bool
+test_keypad(xkb_keysym_t ks, char *name)
+{
+    const char prefix[] = "KP_";
+    return strncmp(prefix, name, sizeof(prefix) - 1) == 0;
+}
 
 static int
 test_string(const char *string, xkb_keysym_t expected)
@@ -53,10 +140,24 @@ test_casestring(const char *string, xkb_keysym_t expected)
     return keysym == expected;
 }
 
+static void
+test_ambiguous_icase_names(const struct ambiguous_icase_ks_names_entry *entry)
+{
+    for (int k = 0; k < entry->count; k++) {
+        /* Check expected result */
+        assert(test_casestring(entry->names[k], entry->keysym));
+        /* If the keysym is cased, then check the resulting keysym is lower-cased */
+        xkb_keysym_t keysym = xkb_keysym_from_name(entry->names[k], 0);
+        if (xkb_keysym_is_lower(keysym) || xkb_keysym_is_upper(keysym)) {
+            assert(xkb_keysym_is_lower(entry->keysym));
+        }
+    }
+}
+
 static int
 test_keysym(xkb_keysym_t keysym, const char *expected)
 {
-    char s[16];
+    char s[XKB_KEYSYM_NAME_MAX_SIZE];
 
     xkb_keysym_get_name(keysym, s, sizeof(s));
 
@@ -85,6 +186,87 @@ test_utf8(xkb_keysym_t keysym, const char *expected)
 
     return streq(s, expected);
 }
+
+#if HAVE_ICU
+
+static inline uint32_t
+to_simple_lower(uint32_t cp)
+{
+    return (uint32_t)u_tolower((UChar32) cp);
+}
+
+static inline uint32_t
+to_simple_upper(uint32_t cp)
+{
+    return (uint32_t)u_toupper((UChar32) cp);
+}
+
+#define KEYSYM     "0x%04"PRIx32
+#define CODE_POINT "U+%04"PRIX32
+
+static void
+test_icu_case_mappings(xkb_keysym_t ks)
+{
+    /* Check lower case mapping */
+    xkb_keysym_t ks_mapped = xkb_keysym_to_lower(ks);
+    uint32_t cp = xkb_keysym_to_utf32(ks);
+    uint32_t expected = to_simple_lower(cp);
+    if (ks_mapped && ks_mapped != ks) {
+        uint32_t got = xkb_keysym_to_utf32(ks_mapped);
+        assert_printf(got == expected,
+                      "Invalid xkb_keysym_to_lower("KEYSYM") == "KEYSYM": "
+                      "expected "CODE_POINT", got: "CODE_POINT"\n",
+                      ks, ks_mapped, expected, got);
+        got = !!xkb_keysym_is_upper(ks);
+        expected = !!(u_isUUppercase(cp) || u_istitle(cp));
+        assert_printf(got == expected || u_istitle(cp),
+                      "Invalid xkb_keysym_is_upper("KEYSYM") ("CODE_POINT"): "
+                      "expected %d, got: %d\n",
+                      ks, cp, expected, got);
+        if (u_istitle(cp)) {
+            fprintf(stderr,
+                    "%s title case handling "KEYSYM" ("CODE_POINT")\n",
+                    (got == expected) ? "[INFO] valid" : "[WARNING] invalid",
+                    ks, cp);
+        }
+    } else if (expected != cp) {
+        fprintf(stderr,
+                "[WARNING] missing lower case mapping for "KEYSYM": "
+                "expected "CODE_POINT", got: "CODE_POINT"\n",
+                ks, expected, cp);
+        assert_printf(!xkb_keysym_is_upper(ks),
+                      "Invalid xkb_keysym_is_upper("KEYSYM") ("CODE_POINT"): "
+                      "expected false, got: true\n",
+                      ks, cp);
+    }
+
+    /* Check upper case mapping */
+    ks_mapped = xkb_keysym_to_upper(ks);
+    expected = to_simple_upper(cp);
+    if (ks_mapped && ks_mapped != ks) {
+        uint32_t got = xkb_keysym_to_utf32(ks_mapped);
+        assert_printf(got == expected,
+                      "Invalid xkb_keysym_to_upper("KEYSYM") == "KEYSYM": "
+                      "expected "CODE_POINT", got: "CODE_POINT"\n",
+                      ks, ks_mapped, expected, got);
+        got = !!xkb_keysym_is_lower(ks);
+        expected = !!u_isULowercase(cp);
+        assert_printf(got == expected,
+                      "Invalid xkb_keysym_is_lower("KEYSYM") ("CODE_POINT"): "
+                      "expected %d, got: %d\n",
+                      ks, cp, expected, got);
+    } else if (expected != cp) {
+        fprintf(stderr,
+                "[WARNING] missing upper case mapping for "KEYSYM": "
+                "expected "CODE_POINT", got: "CODE_POINT"\n",
+                ks, expected, cp);
+        assert_printf(!xkb_keysym_is_lower(ks),
+                      "Invalid xkb_keysym_is_lower("KEYSYM") ("CODE_POINT"): "
+                      "expected false, got: true\n",
+                      ks, cp);
+    }
+}
+#endif
 
 static void
 test_github_issue_42(void)
@@ -117,11 +299,11 @@ get_keysym_name(xkb_keysym_t keysym, char *buffer, size_t size)
 static int
 test_utf32_to_keysym(uint32_t ucs, xkb_keysym_t expected)
 {
-    char expected_name[64];
-    char actual_name[64];
+    char expected_name[XKB_KEYSYM_NAME_MAX_SIZE];
+    char actual_name[XKB_KEYSYM_NAME_MAX_SIZE];
     xkb_keysym_t actual = xkb_utf32_to_keysym(ucs);
-    get_keysym_name(expected, expected_name, 64);
-    get_keysym_name(actual, actual_name, 64);
+    get_keysym_name(expected, expected_name, XKB_KEYSYM_NAME_MAX_SIZE);
+    get_keysym_name(actual, actual_name, XKB_KEYSYM_NAME_MAX_SIZE);
 
     fprintf(stderr, "Code point 0x%lx: expected keysym: %s, actual: %s\n\n",
             (unsigned long)ucs, expected_name, actual_name);
@@ -131,6 +313,88 @@ test_utf32_to_keysym(uint32_t ucs, xkb_keysym_t expected)
 int
 main(void)
 {
+    test_init();
+
+    /* Bounds */
+    assert(XKB_KEYSYM_MIN == 0);
+    assert(XKB_KEYSYM_MIN < XKB_KEYSYM_MAX);
+    assert(XKB_KEYSYM_MAX <= UINT32_MAX); /* Ensure it fits in xkb_keysym_t */
+    assert(XKB_KEYSYM_MAX <= INT32_MAX); /* Ensure correct cast to int32_t */
+    assert(XKB_KEYSYM_MIN_ASSIGNED == XKB_KEYSYM_MIN);
+    assert(XKB_KEYSYM_MIN_ASSIGNED < XKB_KEYSYM_MAX_ASSIGNED);
+    assert(XKB_KEYSYM_MAX_ASSIGNED <= XKB_KEYSYM_MAX);
+    assert(XKB_KEYSYM_MIN_EXPLICIT == XKB_KEYSYM_MIN_ASSIGNED);
+    assert(XKB_KEYSYM_MIN_EXPLICIT < XKB_KEYSYM_MAX_EXPLICIT);
+    assert(XKB_KEYSYM_MAX_EXPLICIT <= XKB_KEYSYM_MAX_ASSIGNED);
+    assert(XKB_KEYSYM_COUNT_EXPLICIT <= XKB_KEYSYM_MAX_EXPLICIT - XKB_KEYSYM_MIN_EXPLICIT + 1);
+    assert(XKB_KEYSYM_UNICODE_MIN >= XKB_KEYSYM_MIN_EXPLICIT);
+    assert(XKB_KEYSYM_UNICODE_MIN < XKB_KEYSYM_UNICODE_MAX);
+    assert(XKB_KEYSYM_UNICODE_MAX <= XKB_KEYSYM_MAX_EXPLICIT);
+
+    /* Assigned keysyms */
+    assert(xkb_keysym_is_assigned(XKB_KEYSYM_MIN));
+    assert(xkb_keysym_is_assigned(XKB_KEYSYM_MIN_ASSIGNED));
+    assert(xkb_keysym_is_assigned(XKB_KEY_space));
+    assert(xkb_keysym_is_assigned(XKB_KEY_nobreakspace));
+    assert(xkb_keysym_is_assigned(XKB_KEY_Aogonek));
+    assert(xkb_keysym_is_assigned(XKB_KEY_Hstroke));
+    assert(xkb_keysym_is_assigned(XKB_KEY_kra));
+    assert(xkb_keysym_is_assigned(XKB_KEY_braille_dot_1));
+    assert(xkb_keysym_is_assigned(XKB_KEY_XF86KbdLcdMenu5));
+    assert(xkb_keysym_is_assigned(XKB_KEY_Shift_L));
+    assert(xkb_keysym_is_assigned(XKB_KEY_XF86MonBrightnessUp));
+    assert(xkb_keysym_is_assigned(XKB_KEY_VoidSymbol));
+    assert(xkb_keysym_is_assigned(XKB_KEYSYM_UNICODE_MIN));
+    assert(xkb_keysym_is_assigned((XKB_KEYSYM_UNICODE_MIN + XKB_KEYSYM_UNICODE_MAX) / 2));
+    assert(xkb_keysym_is_assigned(XKB_KEYSYM_UNICODE_MAX));
+    assert(xkb_keysym_is_assigned(XKB_KEYSYM_MAX_ASSIGNED));
+    assert(!xkb_keysym_is_assigned(XKB_KEYSYM_MAX));
+
+    test_modifiers_table();
+
+    struct xkb_keysym_iterator *iter = xkb_keysym_iterator_new(false);
+    xkb_keysym_t ks_prev = XKB_KEYSYM_MIN;
+    uint32_t count = 0;
+    uint32_t count_non_unicode = 0;
+    while (xkb_keysym_iterator_next(iter)) {
+        count++;
+        xkb_keysym_t ks = xkb_keysym_iterator_get_keysym(iter);
+        if (ks < XKB_KEYSYM_UNICODE_MIN || ks > XKB_KEYSYM_UNICODE_MAX)
+            count_non_unicode++;
+        assert(ks > ks_prev || count == 1);
+        ks_prev = ks;
+        /* Check assigned keysyms bounds */
+        assert((int32_t)XKB_KEYSYM_MIN_ASSIGNED <= (int32_t)ks && ks <= XKB_KEYSYM_MAX_ASSIGNED);
+        /* Check utf8 */
+        char utf8[7];
+        int needed = xkb_keysym_to_utf8(ks, utf8, sizeof(utf8));
+        assert(0 <= needed && needed <= 5);
+        /* Check maximum name length */
+        char name[XKB_KEYSYM_NAME_MAX_SIZE];
+        needed = xkb_keysym_iterator_get_name(iter, name, sizeof(name));
+        assert(0 < needed && (size_t)needed <= sizeof(name));
+        /* Test modifier keysyms */
+        bool expected = test_modifier(ks);
+        bool got = xkb_keysym_is_modifier(ks);
+        assert_printf(got == expected,
+                      "xkb_keysym_is_modifier(0x%04"PRIx32"): expected %d, got: %d\n",
+                      ks, expected, got);
+        /* Test keypad keysyms */
+        expected = test_keypad(ks, name);
+        got = xkb_keysym_is_keypad(ks);
+        assert_printf(got == expected,
+                      "xkb_keysym_is_keypad(0x%04"PRIx32") \"%s\": "
+                      "expected %d, got: %d\n",
+                      ks, name, expected, got);
+#if HAVE_ICU
+        /* Check case mappings */
+        test_icu_case_mappings(ks);
+#endif
+    }
+    iter = xkb_keysym_iterator_unref(iter);
+    assert(ks_prev == XKB_KEYSYM_MAX_ASSIGNED);
+    assert(count == XKB_KEYSYM_UNICODE_MAX - XKB_KEYSYM_UNICODE_MIN + 1 + count_non_unicode);
+
     /* Named keysyms */
     assert(test_string("NoSymbol", XKB_KEY_NoSymbol));
     assert(test_string("Undo", 0xFF65));
@@ -166,9 +430,10 @@ main(void)
     assert(test_string("U009f", XKB_KEY_NoSymbol));
     assert(test_string("U00a0", 0x00000a0));
     assert(test_string("U00ff", 0x00000ff));
+    assert(test_string("U0100", XKB_KEYSYM_UNICODE_MIN));
     assert(test_string("U4567", 0x1004567));
     assert(test_string("U1F4A9", 0x0101F4A9));
-    assert(test_string("U10FFFF", 0x110ffff)); /* Max Unicode */
+    assert(test_string("U10FFFF", XKB_KEYSYM_UNICODE_MAX)); /* Max Unicode */
     assert(test_string("U110000", XKB_KEY_NoSymbol));
     /* Unicode: test syntax */
     assert(test_string("U00004567", 0x1004567));         /* OK:  8 digits */
@@ -189,8 +454,8 @@ main(void)
     assert(test_string("0x1", 0x00000001));
     assert(test_string("0x01234567", 0x01234567));
     assert(test_string("0x09abcdef", 0x09abcdef));
-    assert(test_string("0x01000100", 0x01000100)); /* Min Unicode. */
-    assert(test_string("0x0110ffff", 0x0110ffff)); /* Max Unicode. */
+    assert(test_string("0x01000100", XKB_KEYSYM_UNICODE_MIN)); /* Min Unicode. */
+    assert(test_string("0x0110ffff", XKB_KEYSYM_UNICODE_MAX)); /* Max Unicode. */
     assert(test_string(STRINGIFY2(XKB_KEYSYM_MAX), XKB_KEYSYM_MAX));   /* Max keysym. */
     assert(test_string("0x20000000", XKB_KEY_NoSymbol));
     assert(test_string("0xffffffff", XKB_KEY_NoSymbol));
@@ -215,16 +480,23 @@ main(void)
     assert(test_keysym(0x1008FF56, "XF86Close"));
     assert(test_keysym(0x0, "NoSymbol"));
     assert(test_keysym(0x1008FE20, "XF86Ungrab"));
-    assert(test_keysym(0x01000000, "0x01000000"));
+    assert(test_keysym(XKB_KEYSYM_UNICODE_OFFSET, "0x01000000"));
+    /* Canonical names */
+    assert(test_keysym(XKB_KEY_Henkan, "Henkan_Mode"));
+    assert(test_keysym(XKB_KEY_ISO_Group_Shift, "Mode_switch"));
+    assert(test_keysym(XKB_KEY_dead_perispomeni, "dead_tilde"));
+    assert(test_keysym(XKB_KEY_guillemetleft, "guillemotleft"));
+    assert(test_keysym(XKB_KEY_ordmasculine, "masculine"));
+    assert(test_keysym(XKB_KEY_Greek_lambda, "Greek_lamda"));
     /* Min Unicode */
-    assert(test_keysym(0x01000100, "U0100"));
+    assert(test_keysym(XKB_KEYSYM_UNICODE_MIN, "U0100"));
     assert(test_keysym(0x01001234, "U1234"));
     /* 16-bit unicode padded to width 4. */
     assert(test_keysym(0x010002DE, "U02DE"));
     /* 32-bit unicode padded to width 8. */
     assert(test_keysym(0x0101F4A9, "U0001F4A9"));
     /* Max Unicode */
-    assert(test_keysym(0x0110ffff, "U0010FFFF"));
+    assert(test_keysym(XKB_KEYSYM_UNICODE_MAX, "U0010FFFF"));
     /* Max Unicode + 1 */
     assert(test_keysym(0x01110000, "0x01110000"));
     /* Min keysym. */
@@ -253,6 +525,10 @@ main(void)
     assert(test_casestring("THORN", 0x00fe));
     assert(test_casestring("Thorn", 0x00fe));
     assert(test_casestring("thorn", 0x00fe));
+
+    for (size_t k = 0; k < ARRAY_SIZE(ambiguous_icase_ks_names); k++) {
+        test_ambiguous_icase_names(&ambiguous_icase_ks_names[k]);
+    }
 
     assert(test_string("", XKB_KEY_NoSymbol));
     assert(test_casestring("", XKB_KEY_NoSymbol));
@@ -293,14 +569,14 @@ main(void)
     assert(test_utf8(XKB_KEY_KP_Subtract, "-"));
 
     /* Unicode keysyms */
-    assert(test_utf8(0x1000000, NULL) == 0); /* Min Unicode codepoint */
+    assert(test_utf8(XKB_KEYSYM_UNICODE_OFFSET, NULL) == 0); /* Min Unicode codepoint */
     assert(test_utf8(0x1000001, "\x01"));     /* Currently accepted, but not intended (< 0x100100) */
     assert(test_utf8(0x1000020, " "));        /* Currently accepted, but not intended (< 0x100100) */
     assert(test_utf8(0x100007f, "\x7f"));     /* Currently accepted, but not intended (< 0x100100) */
     assert(test_utf8(0x10000a0, "\xc2\xa0")); /* Currently accepted, but not intended (< 0x100100) */
-    assert(test_utf8(0x1000100, "Ā")); /* Min Unicode keysym */
+    assert(test_utf8(XKB_KEYSYM_UNICODE_MIN, "Ā")); /* Min Unicode keysym */
     assert(test_utf8(0x10005d0, "א"));
-    assert(test_utf8(0x110ffff, "\xf4\x8f\xbf\xbf")); /* Max Unicode */
+    assert(test_utf8(XKB_KEYSYM_UNICODE_MAX, "\xf4\x8f\xbf\xbf")); /* Max Unicode */
     assert(test_utf8(0x0100d800, NULL) == 0); // Unicode surrogates
     assert(test_utf8(0x0100dfff, NULL) == 0); // Unicode surrogates
     assert(test_utf8(0x1110000, NULL) == 0);

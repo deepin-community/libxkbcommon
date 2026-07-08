@@ -67,6 +67,7 @@ xvfb_wrapper(int (*test_func)(char* display))
         goto err_display_fd;
     }
     snprintf(display_fd_string, sizeof(display_fd_string), "%d", fileno(display_fd));
+    fprintf(stderr, "display_fd_string: %s\n", display_fd_string);
 
     /* Set SIGUSR1 to SIG_IGN so Xvfb will send us that signal
      * when it's ready to accept connections */
@@ -90,7 +91,8 @@ xvfb_wrapper(int (*test_func)(char* display))
      */
     ret = posix_spawnp(&xvfb_pid, "Xvfb", NULL, NULL, xvfb_argv, envp);
     if (ret != 0) {
-        ret = SKIP_TEST;
+        fprintf(stderr, "posix_spawnp error %d: %s\n", ret, strerror(ret));
+        ret = TEST_SETUP_FAILURE;
         goto err_xvfd;
     }
 
@@ -115,7 +117,8 @@ xvfb_wrapper(int (*test_func)(char* display))
     rewind(display_fd);
     length = fread(&display[1], 1, sizeof(display) - 1, display_fd);
     if (length <= 0) {
-        ret = SKIP_TEST;
+        fprintf(stderr, "fread error: length=%zu\n", length);
+        ret = TEST_SETUP_FAILURE;
         goto err_xvfd;
     } else {
         /* Drop the newline character */
@@ -133,25 +136,25 @@ err_display_fd:
     return ret;
 }
 
-/* All X11_TEST functions are in the test_functions_section ELF section.
+/* All X11_TEST functions are in the test_func_sec ELF section.
  * __start and __stop point to the start and end of that section. See the
  * __attribute__(section) documentation.
  */
-extern const struct test_function __start_test_functions_section, __stop_test_functions_section;
+DECLARE_TEST_ELF_SECTION_POINTERS(TEST_ELF_SECTION);
 
 int
 x11_tests_run()
 {
     size_t count = 1; /* For NULL-terminated entry */
 
-    for (const struct test_function *t = &__start_test_functions_section;
-         t < &__stop_test_functions_section;
+    for (const struct test_function *t = &__start_test_func_sec;
+         t < &__stop_test_func_sec;
          t++)
         count++;
 
     int rc;
-    for (const struct test_function *t = &__start_test_functions_section;
-         t < &__stop_test_functions_section;
+    for (const struct test_function *t = &__start_test_func_sec;
+         t < &__stop_test_func_sec;
          t++) {
         fprintf(stderr, "Running test: %s from %s\n", t->name, t->file);
         rc = xvfb_wrapper(t->func);
