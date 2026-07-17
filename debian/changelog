@@ -1,3 +1,22 @@
+libxkbcommon (1.7.0-2) unstable; urgency=medium
+
+  * Rebuild for migration.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Mon, 16 Dec 2024 12:05:36 +0200
+
+libxkbcommon (1.7.0-1) unstable; urgency=medium
+
+  [ Samuel Thibault ]
+  * Add libxkbcommon0-udeb, used on hurd-any.
+
+  [ Timo Aaltonen ]
+  * New upstream release.
+  * rules: Make sure docs are still built.
+  * tools.install: Updated.
+  * control: Migrate to pkgconf.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Wed, 13 Nov 2024 16:24:43 +0200
+
 libxkbcommon (1.6.0-1) unstable; urgency=medium
 
   * New upstream release.

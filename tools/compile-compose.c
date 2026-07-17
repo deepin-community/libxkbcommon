@@ -25,33 +25,40 @@
 
 #include <getopt.h>
 #include <locale.h>
-#include <stdio.h>
-#include <stdlib.h>
+#include <stdbool.h>
 
 #include "xkbcommon/xkbcommon.h"
 #include "xkbcommon/xkbcommon-keysyms.h"
 #include "xkbcommon/xkbcommon-compose.h"
+#include "src/compose/dump.h"
+#include "src/keysym.h"
 
 static void
 usage(FILE *fp, char *progname)
 {
     fprintf(fp,
-            "Usage: %s [--file FILE] [--locale LOCALE | --locale-from-env | --locale-from-setlocale]\n",
+            "Usage: %s [--help] [--file FILE] [--locale LOCALE]\n",
             progname);
     fprintf(fp,
-            "   --file - specify a file to load\n"
-            "   --locale - specify the locale directly\n"
-            "   --locale-from-env - get the locale from the LC_ALL/LC_CTYPE/LANG environment variables (falling back to C)\n"
-            "   --locale-from-setlocale - get the locale using setlocale(3)\n"
-    );
+            "\n"
+            "Compile a Compose file and print it\n"
+            "\n"
+            "Options:\n"
+            " --help\n"
+            "    Print this help and exit\n"
+            " --file FILE\n"
+            "    Specify a Compose file to load\n"
+            " --locale LOCALE\n"
+            "    Specify the locale directly, instead of relying on the environment variables\n"
+            "    LC_ALL, LC_TYPE and LANG.\n");
 }
 
-static void
+static bool
 print_compose_table_entry(struct xkb_compose_table_entry *entry)
 {
     size_t nsyms;
     const xkb_keysym_t *syms = xkb_compose_table_entry_sequence(entry, &nsyms);
-    char buf[128];
+    char buf[XKB_KEYSYM_NAME_MAX_SIZE];
     for (size_t i = 0; i < nsyms; i++) {
         xkb_keysym_get_name(syms[i], buf, sizeof(buf));
         printf("<%s>", buf);
@@ -59,10 +66,17 @@ print_compose_table_entry(struct xkb_compose_table_entry *entry)
             printf(" ");
         }
     }
-    printf(":");
+    printf(" : ");
     const char *utf8 = xkb_compose_table_entry_utf8(entry);
     if (*utf8 != '\0') {
-        printf(" \"%s\"", utf8);
+        char *escaped = escape_utf8_string_literal(utf8);
+        if (!escaped) {
+            fprintf(stderr, "ERROR: Cannot escape the string: allocation error\n");
+            return false;
+        } else {
+            printf(" \"%s\"", escaped);
+            free(escaped);
+        }
     }
     const xkb_keysym_t keysym = xkb_compose_table_entry_keysym(entry);
     if (keysym != XKB_KEY_NoSymbol) {
@@ -70,6 +84,7 @@ print_compose_table_entry(struct xkb_compose_table_entry *entry)
         printf(" %s", buf);
     }
     printf("\n");
+    return true;
 }
 
 int
@@ -84,18 +99,20 @@ main(int argc, char *argv[])
     enum options {
         OPT_FILE,
         OPT_LOCALE,
-        OPT_LOCALE_FROM_ENV,
-        OPT_LOCALE_FROM_SETLOCALE,
     };
     static struct option opts[] = {
-        {"file",                  required_argument,      0, OPT_FILE},
-        {"locale",                required_argument,      0, OPT_LOCALE},
-        {"locale-from-env",       no_argument,            0, OPT_LOCALE_FROM_ENV},
-        {"locale-from-setlocale", no_argument,            0, OPT_LOCALE_FROM_SETLOCALE},
+        {"help",   no_argument,       0, 'h'},
+        {"file",   required_argument, 0, OPT_FILE},
+        {"locale", required_argument, 0, OPT_LOCALE},
         {0, 0, 0, 0},
     };
 
     setlocale(LC_ALL, "");
+
+    /* Initialize the locale to use */
+    locale = setlocale(LC_CTYPE, NULL);
+    if (!locale)
+        locale = "C";
 
     while (1) {
         int opt;
@@ -112,18 +129,6 @@ main(int argc, char *argv[])
         case OPT_LOCALE:
             locale = optarg;
             break;
-        case OPT_LOCALE_FROM_ENV:
-            locale = getenv("LC_ALL");
-            if (!locale)
-                locale = getenv("LC_CTYPE");
-            if (!locale)
-                locale = getenv("LANG");
-            if (!locale)
-                locale = "C";
-            break;
-        case OPT_LOCALE_FROM_SETLOCALE:
-            locale = setlocale(LC_CTYPE, NULL);
-            break;
         case 'h':
             usage(stdout, argv[0]);
             return EXIT_SUCCESS;
@@ -132,7 +137,9 @@ main(int argc, char *argv[])
             return EXIT_INVALID_USAGE;
         }
     }
+
     if (locale == NULL) {
+        fprintf(stderr, "ERROR: Cannot determine the locale.\n");
         usage(stderr, argv[0]);
         return EXIT_INVALID_USAGE;
     }
@@ -162,7 +169,8 @@ main(int argc, char *argv[])
             xkb_compose_table_new_from_locale(ctx, locale,
                                               XKB_COMPOSE_COMPILE_NO_FLAGS);
         if (!compose_table) {
-            fprintf(stderr, "Couldn't create compose from locale\n");
+            fprintf(stderr,
+                    "Couldn't create compose from locale \"%s\"\n", locale);
             goto out;
         }
     }
@@ -170,10 +178,15 @@ main(int argc, char *argv[])
     struct xkb_compose_table_iterator *iter = xkb_compose_table_iterator_new(compose_table);
     struct xkb_compose_table_entry *entry;
     while ((entry = xkb_compose_table_iterator_next(iter))) {
-        print_compose_table_entry(entry);
+        if (!print_compose_table_entry(entry)) {
+            ret = EXIT_FAILURE;
+            goto entry_error;
+        }
     }
-    xkb_compose_table_iterator_free(iter);
+    ret = EXIT_SUCCESS;
 
+entry_error:
+    xkb_compose_table_iterator_free(iter);
 out:
     xkb_compose_table_unref(compose_table);
 file_error:

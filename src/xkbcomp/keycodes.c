@@ -30,6 +30,7 @@
 #include "text.h"
 #include "expr.h"
 #include "include.h"
+#include "util-mem.h"
 
 typedef struct {
     enum merge_mode merge;
@@ -47,6 +48,7 @@ typedef struct {
 typedef struct {
     char *name;
     int errorCount;
+    unsigned int include_depth;
 
     xkb_keycode_t min_key_code;
     xkb_keycode_t max_key_code;
@@ -155,10 +157,12 @@ ClearKeyNamesInfo(KeyNamesInfo *info)
 }
 
 static void
-InitKeyNamesInfo(KeyNamesInfo *info, struct xkb_context *ctx)
+InitKeyNamesInfo(KeyNamesInfo *info, struct xkb_context *ctx,
+                 unsigned int include_depth)
 {
     memset(info, 0, sizeof(*info));
     info->ctx = ctx;
+    info->include_depth = include_depth;
     info->min_key_code = XKB_KEYCODE_INVALID;
 #if XKB_KEYCODE_INVALID < XKB_KEYCODE_MAX
 #error "Hey, you can't be changing stuff like that."
@@ -265,8 +269,7 @@ MergeIncludedKeycodes(KeyNamesInfo *into, KeyNamesInfo *from,
     }
 
     if (into->name == NULL) {
-        into->name = from->name;
-        from->name = NULL;
+        into->name = steal(&from->name);
     }
 
     /* Merge key names. */
@@ -339,9 +342,13 @@ HandleIncludeKeycodes(KeyNamesInfo *info, IncludeStmt *include)
 {
     KeyNamesInfo included;
 
-    InitKeyNamesInfo(&included, info->ctx);
-    included.name = include->stmt;
-    include->stmt = NULL;
+    if (ExceedsIncludeMaxDepth(info->ctx, info->include_depth)) {
+        info->errorCount += 10;
+        return false;
+    }
+
+    InitKeyNamesInfo(&included, info->ctx, 0 /* unused */);
+    included.name = steal(&include->stmt);
 
     for (IncludeStmt *stmt = include; stmt; stmt = stmt->next_incl) {
         KeyNamesInfo next_incl;
@@ -354,7 +361,7 @@ HandleIncludeKeycodes(KeyNamesInfo *info, IncludeStmt *include)
             return false;
         }
 
-        InitKeyNamesInfo(&next_incl, info->ctx);
+        InitKeyNamesInfo(&next_incl, info->ctx, info->include_depth + 1);
 
         HandleKeycodesFile(&next_incl, file, MERGE_OVERRIDE);
 
@@ -443,14 +450,15 @@ HandleKeyNameVar(KeyNamesInfo *info, VarDef *stmt)
         return false;
 
     if (elem) {
-        log_err(info->ctx, XKB_LOG_MESSAGE_NO_ID, "Unknown element %s encountered; "
-                "Default for field %s ignored\n", elem, field);
+        log_err(info->ctx, XKB_ERROR_GLOBAL_DEFAULTS_WRONG_SCOPE,
+                "Cannot set global defaults for \"%s\" element; "
+                "Assignment to \"%s.%s\" ignored\n", elem, elem, field);
         return false;
     }
 
     if (!istreq(field, "minimum") && !istreq(field, "maximum")) {
         log_err(info->ctx, XKB_LOG_MESSAGE_NO_ID, "Unknown field encountered; "
-                "Assignment to field %s ignored\n", field);
+                "Assignment to field \"%s\" ignored\n", field);
         return false;
     }
 
@@ -662,7 +670,7 @@ CompileKeycodes(XkbFile *file, struct xkb_keymap *keymap,
 {
     KeyNamesInfo info;
 
-    InitKeyNamesInfo(&info, keymap->ctx);
+    InitKeyNamesInfo(&info, keymap->ctx, 0);
 
     HandleKeycodesFile(&info, file, merge);
     if (info.errorCount != 0)

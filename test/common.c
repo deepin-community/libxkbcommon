@@ -47,6 +47,18 @@
 
 #include "test.h"
 #include "utils.h"
+#include "src/keysym.h"
+
+#include "tools/tools-common.h"
+
+
+/* Setup test */
+void
+test_init(void)
+{
+    /* Make stdout always unbuffered, to ensure we always get it entirely */
+    setbuf(stdout, NULL);
+}
 
 /*
  * Test a sequence of keysyms, resulting from a sequence of key presses,
@@ -76,7 +88,8 @@ test_key_seq_va(struct xkb_keymap *keymap, va_list ap)
     const xkb_keysym_t *syms;
     xkb_keysym_t sym;
     unsigned int nsyms, i;
-    char ksbuf[64];
+    char ksbuf[XKB_KEYSYM_NAME_MAX_SIZE];
+    const char *opstr = NULL;
 
     fprintf(stderr, "----\n");
 
@@ -87,18 +100,30 @@ test_key_seq_va(struct xkb_keymap *keymap, va_list ap)
         kc = va_arg(ap, int) + EVDEV_OFFSET;
         op = va_arg(ap, int);
 
+        switch (op) {
+            case DOWN: opstr = "DOWN"; break;
+            case REPEAT: opstr = "REPEAT"; break;
+            case UP: opstr = "UP"; break;
+            case BOTH: opstr = "BOTH"; break;
+            case NEXT: opstr = "NEXT"; break;
+            case FINISH: opstr = "FINISH"; break;
+        }
+
         nsyms = xkb_state_key_get_syms(state, kc, &syms);
         if (nsyms == 1) {
             sym = xkb_state_key_get_one_sym(state, kc);
             syms = &sym;
         }
 
-        fprintf(stderr, "got %u syms for keycode %u: [", nsyms, kc);
-
         if (op == DOWN || op == BOTH)
             xkb_state_update_key(state, kc, XKB_KEY_DOWN);
         if (op == UP || op == BOTH)
             xkb_state_update_key(state, kc, XKB_KEY_UP);
+
+#if HAVE_TOOLS
+        tools_print_keycode_state("", state, NULL, kc, XKB_CONSUMED_MODE_XKB, PRINT_ALL_FIELDS);
+#endif
+        fprintf(stderr, "op %-6s got %u syms for keycode %3u: [", opstr, nsyms, kc);
 
         for (i = 0; i < nsyms; i++) {
             keysym = va_arg(ap, int);
@@ -107,15 +132,15 @@ test_key_seq_va(struct xkb_keymap *keymap, va_list ap)
 
             if (keysym == FINISH || keysym == NEXT) {
                 xkb_keysym_get_name(syms[i], ksbuf, sizeof(ksbuf));
-                fprintf(stderr, "Did not expect keysym: %s.\n", ksbuf);
+                fprintf(stderr, " Did not expect keysym: %s.\n", ksbuf);
                 goto fail;
             }
 
             if (keysym != syms[i]) {
                 xkb_keysym_get_name(keysym, ksbuf, sizeof(ksbuf));
-                fprintf(stderr, "Expected keysym: %s. ", ksbuf);;
+                fprintf(stderr, " Expected keysym: %s. ", ksbuf);;
                 xkb_keysym_get_name(syms[i], ksbuf, sizeof(ksbuf));
-                fprintf(stderr, "Got keysym: %s.\n", ksbuf);;
+                fprintf(stderr, " Got keysym: %s.\n", ksbuf);;
                 goto fail;
             }
         }
@@ -124,7 +149,7 @@ test_key_seq_va(struct xkb_keymap *keymap, va_list ap)
             keysym = va_arg(ap, int);
             if (keysym != XKB_KEY_NoSymbol) {
                 xkb_keysym_get_name(keysym, ksbuf, sizeof(ksbuf));
-                fprintf(stderr, "Expected %s, but got no keysyms.\n", ksbuf);
+                fprintf(stderr, " Expected %s, but got no keysyms.\n", ksbuf);
                 goto fail;
             }
         }

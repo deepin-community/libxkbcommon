@@ -11,7 +11,7 @@ Build-Depends:
  flex,
  graphviz,
  meson,
- pkg-config,
+ pkgconf,
  quilt,
  libwayland-dev [linux-any],
  libxcb-xkb-dev,
@@ -46,6 +46,17 @@ Description: library interface to the XKB compiler - shared library
  .
  This module can be found at
  https://github.com/xkbcommon/libxkbcommon.git
+
+Package: libxkbcommon0-udeb
+XC-Package-Type: udeb
+Section: debian-installer
+Architecture: any
+Depends:
+ xkb-data-udeb,
+ ${shlibs:Depends},
+ ${misc:Depends},
+Description: library interface to the XKB compiler - shared library
+ This is a udeb, or a microdeb, for the debian-installer.
 
 Package: libxkbcommon-dev
 Section: libdevel

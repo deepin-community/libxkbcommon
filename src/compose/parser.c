@@ -57,8 +57,8 @@ OR PERFORMANCE OF THIS SOFTWARE.
 #include <errno.h>
 
 #include "utils.h"
-#include "scanner-utils.h"
 #include "table.h"
+#include "scanner-utils.h"
 #include "paths.h"
 #include "utf8.h"
 #include "parser.h"
@@ -244,10 +244,9 @@ skip_more_whitespace_and_comments:
         return TOK_IDENT;
     }
 
+    scanner_err(s, "unrecognized token");
     /* Discard rest of line. */
     scanner_skip_to_eol(s);
-
-    scanner_err(s, "unrecognized token");
     return TOK_ERROR;
 }
 
@@ -329,7 +328,7 @@ struct production {
     xkb_keysym_t lhs[MAX_LHS_LEN];
     unsigned int len;
     xkb_keysym_t keysym;
-    char string[256];
+    char string[XKB_COMPOSE_MAX_STRING_SIZE];
     /* At least one of these is true. */
     bool has_keysym;
     bool has_string;
@@ -469,6 +468,24 @@ resolve_modifier(const char *name)
     return XKB_MOD_INVALID;
 }
 
+/* Parse a string literal ("...") and return the corresponding unescaped string,
+ * or NULL if it fails.
+ * This is aimed only for testing (un)escaping characters. */
+char *
+parse_string_literal(struct xkb_context *ctx, const char *string)
+{
+    struct scanner s;
+    union lvalue val;
+    scanner_init(&s, ctx, string, strlen(string), "(unamed)", NULL);
+    switch (lex(&s, &val)) {
+        case TOK_STRING:
+            return strdup(val.string.str);
+        default:
+            fprintf(stderr, "ERROR: %s\n", s.s);
+            return NULL;
+    }
+}
+
 static bool
 parse(struct xkb_compose_table *table, struct scanner *s,
       unsigned include_depth);
@@ -526,6 +543,16 @@ parse(struct xkb_compose_table *table, struct scanner *s,
     struct production production;
     enum { MAX_ERRORS = 10 };
     int num_errors = 0;
+
+    /* Basic detection of wrong character encoding.
+       The first character relevant to the grammar must be ASCII:
+       whitespace, include, modifier list, keysym, comment */
+    if (!scanner_check_supported_char_encoding(s)) {
+        scanner_err(s,
+                    "This could be a file encoding issue. "
+                    "Supported file encodings are ASCII and UTF-8.");
+        goto fail;
+    }
 
 initial:
     production.len = 0;
@@ -660,8 +687,10 @@ rhs:
             scanner_warn(s, "right-hand side string must not be empty; skipping line");
             goto skip;
         }
-        if (val.string.len >= sizeof(production.string)) {
-            scanner_warn(s, "right-hand side string is too long; skipping line");
+        if (val.string.len > sizeof(production.string)) {
+            scanner_warn(s,
+                         "right-hand side string is too long: expected max: %d, got: %d; "
+                         "skipping line", (int)sizeof(production.string) - 1, (int)val.string.len);
             goto skip;
         }
         strcpy(production.string, val.string.str);
