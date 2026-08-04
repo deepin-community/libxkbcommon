@@ -1,48 +1,43 @@
 /*
  * Copyright © 2023 Pierre Le Marre
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "config.h"
 
+#include <string.h>
 #include <time.h>
 
 #include "xkbcommon/xkbcommon-compose.h"
 
+#include "../test/compose-iter.h"
 #include "../test/test.h"
 #include "bench.h"
 
 #define BENCHMARK_ITERATIONS 1000
 
+static void
+compose_fn(struct xkb_compose_table_entry *entry, void *data)
+{
+    assert (entry);
+}
+
+/* Benchmark compose traversal using:
+ * • the internal recursive function `xkb_compose_table_for_each` if `foreach` is
+ *   is passed as argument to the program;
+ * • else the iterator API (`xkb_compose_table_iterator_new`, …).
+ */
 int
-main(void)
+main(int argc, char *argv[])
 {
     struct xkb_context *ctx;
     char *path;
     FILE *file;
     struct xkb_compose_table *table;
-    struct xkb_compose_table_iterator *iter;
-    struct xkb_compose_table_entry *entry;
     struct bench bench;
     char *elapsed;
+
+    bool use_foreach_impl = (argc > 1 && strcmp(argv[1], "foreach") == 0);
 
     ctx = test_get_context(CONTEXT_NO_FLAG);
     assert(ctx);
@@ -57,8 +52,7 @@ main(void)
     }
     free(path);
 
-    xkb_context_set_log_level(ctx, XKB_LOG_LEVEL_CRITICAL);
-    xkb_context_set_log_verbosity(ctx, 0);
+    xkb_enable_quiet_logging(ctx);
 
     table = xkb_compose_table_new_from_file(ctx, file, "",
                                             XKB_COMPOSE_FORMAT_TEXT_V1,
@@ -68,11 +62,17 @@ main(void)
 
     bench_start(&bench);
     for (int i = 0; i < BENCHMARK_ITERATIONS; i++) {
-        iter = xkb_compose_table_iterator_new(table);
-        while ((entry = xkb_compose_table_iterator_next(iter))) {
-            assert (entry);
+        if (use_foreach_impl) {
+            xkb_compose_table_for_each(table, compose_fn, NULL);
+        } else {
+            struct xkb_compose_table_iterator *iter;
+            struct xkb_compose_table_entry *entry;
+            iter = xkb_compose_table_iterator_new(table);
+            while ((entry = xkb_compose_table_iterator_next(iter))) {
+                assert (entry);
+            }
+            xkb_compose_table_iterator_free(iter);
         }
-        xkb_compose_table_iterator_free(iter);
     }
     bench_stop(&bench);
 

@@ -1,24 +1,6 @@
 /*
  * Copyright © 2012 Ran Benita <ran234@gmail.com>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "config.h"
@@ -26,6 +8,7 @@
 #include <stdlib.h>
 #include <time.h>
 
+#include "xkbcommon/xkbcommon.h"
 #include "../test/test.h"
 #include "bench.h"
 
@@ -65,15 +48,15 @@ main(void)
     ctx = test_get_context(0);
     assert(ctx);
 
-    keymap = test_compile_rules(ctx, "evdev", "pc104", "us,ru,il,de",
+    keymap = test_compile_rules(ctx, XKB_KEYMAP_FORMAT_TEXT_V1, "evdev",
+                                "pc104", "us,ru,il,de",
                                 ",,,neo", "grp:menu_toggle");
     assert(keymap);
 
     state = xkb_state_new(keymap);
     assert(state);
 
-    xkb_context_set_log_level(ctx, XKB_LOG_LEVEL_CRITICAL);
-    xkb_context_set_log_verbosity(ctx, 0);
+    xkb_enable_quiet_logging(ctx);
 
     srand((unsigned) time(NULL));
 

@@ -1,25 +1,7 @@
 /*
  * Copyright © 2012 Intel Corporation
  * Copyright © 2012 Ran Benita
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  *
  * Author: Daniel Stone <daniel@fooishbar.org>
  */
@@ -28,11 +10,13 @@
 
 #include <sys/types.h>
 #include <sys/stat.h>
-#include <errno.h>
 
 #include "xkbcommon/xkbcommon.h"
-#include "utils.h"
+#include "atom.h"
+#include "darray.h"
 #include "context.h"
+#include "rmlvo.h"
+#include "utils.h"
 
 char *
 xkb_context_getenv(struct xkb_context *ctx, const char *name)
@@ -44,20 +28,52 @@ xkb_context_getenv(struct xkb_context *ctx, const char *name)
     }
 }
 
-unsigned int
+bool
+xkb_context_init_includes(struct xkb_context *ctx)
+{
+    if (ctx->pending_default_includes) {
+        if (darray_empty(ctx->failed_includes)) {
+            if (!xkb_context_include_path_append_default(ctx)) {
+                log_err(ctx, XKB_ERROR_NO_VALID_DEFAULT_INCLUDE_PATH,
+                        "Failed to add any default include path "
+                        "(system path: %s)\n",
+                        xkb_context_include_path_get_system_path(ctx));
+                return false;
+            }
+            ctx->pending_default_includes = false;
+        } else {
+            /*
+             * If there are failed includes then we already tried to load
+             * default include paths, so avoid further attempts.
+             */
+            return false;
+        }
+    }
+    return true;
+}
+
+darray_size_t
 xkb_context_num_failed_include_paths(struct xkb_context *ctx)
 {
-    return darray_size(ctx->failed_includes);
+    return (xkb_context_init_includes(ctx))
+        ? darray_size(ctx->failed_includes)
+        : 0;
 }
 
 const char *
 xkb_context_failed_include_path_get(struct xkb_context *ctx,
-                                    unsigned int idx)
+                                    darray_size_t idx)
 {
     if (idx >= xkb_context_num_failed_include_paths(ctx))
         return NULL;
 
     return darray_item(ctx->failed_includes, idx);
+}
+
+darray_size_t
+xkb_atom_table_size(struct xkb_context *ctx)
+{
+    return atom_table_size(ctx->atom_table);
 }
 
 xkb_atom_t
@@ -167,32 +183,43 @@ xkb_context_get_default_options(struct xkb_context *ctx)
     return env ? env : DEFAULT_XKB_OPTIONS;
 }
 
-void
+enum RMLVO
 xkb_context_sanitize_rule_names(struct xkb_context *ctx,
                                 struct xkb_rule_names *rmlvo)
 {
-    if (isempty(rmlvo->rules))
+    enum RMLVO modified = 0;
+
+    if (isempty(rmlvo->rules)) {
         rmlvo->rules = xkb_context_get_default_rules(ctx);
-    if (isempty(rmlvo->model))
+        modified |= RMLVO_RULES;
+    }
+    if (isempty(rmlvo->model)) {
         rmlvo->model = xkb_context_get_default_model(ctx);
+        modified |= RMLVO_MODEL;
+    }
     /* Layout and variant are tied together, so don't try to use one from
      * the caller and one from the environment. */
     if (isempty(rmlvo->layout)) {
         rmlvo->layout = xkb_context_get_default_layout(ctx);
+        modified |= RMLVO_LAYOUT;
+        const char * const variant = xkb_context_get_default_variant(ctx);
         if (!isempty(rmlvo->variant)) {
-            const char *variant = xkb_context_get_default_variant(ctx);
-            log_warn(ctx,
-                XKB_LOG_MESSAGE_NO_ID,
-                "Layout not provided, but variant set to \"%s\": "
-                "ignoring variant and using defaults for both: "
-                "layout=\"%s\", variant=\"%s\".\n",
-                rmlvo->variant,
-                rmlvo->layout,
-                variant ? variant : "");
+            log_warn(ctx, XKB_LOG_MESSAGE_NO_ID,
+                     "Layout not provided, but variant set to \"%s\": "
+                     "ignoring variant and using defaults for both: "
+                     "layout=\"%s\", variant=\"%s\".\n",
+                     rmlvo->variant,
+                     rmlvo->layout,
+                     variant ? variant : "");
         }
-        rmlvo->variant = xkb_context_get_default_variant(ctx);
+        rmlvo->variant = variant;
+        modified |= RMLVO_VARIANT;
     }
     /* Options can be empty, so respect that if passed in. */
-    if (rmlvo->options == NULL)
+    if (rmlvo->options == NULL) {
         rmlvo->options = xkb_context_get_default_options(ctx);
+        modified |= RMLVO_OPTIONS;
+    }
+
+    return modified;
 }

@@ -1,33 +1,27 @@
 /*
  * Copyright © 2012 Ran Benita <ran234@gmail.com>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
+#pragma once
 
-#ifndef XKBCOMP_SCANNER_UTILS_H
-#define XKBCOMP_SCANNER_UTILS_H
+#include "config.h"
+
+#include <stdbool.h>
+#include <stddef.h>
+#include <stdint.h>
+#include <string.h>
+
+#include "context.h"
+#include "darray.h"
+#include "messages-codes.h"
+#include "utils.h"
+#include "utils-numbers.h"
+#include "utf8.h"
 
 /* Point to some substring in the file; used to avoid copying. */
 struct sval {
     const char *start;
-    unsigned int len;
+    size_t len;
 };
 typedef darray(struct sval) darray_sval;
 
@@ -38,49 +32,72 @@ svaleq(struct sval s1, struct sval s2)
 }
 
 static inline bool
+isvaleq(struct sval s1, struct sval s2)
+{
+    return s1.len == s2.len && istrncmp(s1.start, s2.start, s1.len) == 0;
+}
+
+static inline bool
 svaleq_prefix(struct sval s1, struct sval s2)
 {
     return s1.len <= s2.len && memcmp(s1.start, s2.start, s1.len) == 0;
 }
 
+#define SVAL(start, len) (struct sval){(start), len}
+#define SVAL_LIT(literal) SVAL(literal, sizeof(literal) - 1)
+#define SVAL_INIT(literal) { literal, sizeof(literal) - 1 }
+
+/* A line:column location in the input string (1-based). */
+struct scanner_loc {
+    size_t line, column;
+};
+
 struct scanner {
     const char *s;
     size_t pos;
     size_t len;
+    /*
+     * Internal buffer.
+     * Since this is used to handle paths that are possibly absolute, in theory
+     * we should size it to PATH_MAX. However it is very unlikely to reach such
+     * long paths in our context.
+     */
     char buf[1024];
     size_t buf_pos;
-    size_t line, column;
-    /* The line/column of the start of the current token. */
-    size_t token_line, token_column;
+    /* The position of the start of the current token. */
+    size_t token_pos;
+    /* Cached values used by scanner_token_location. */
+    size_t cached_pos;
+    struct scanner_loc cached_loc;
     const char *file_name;
     struct xkb_context *ctx;
     void *priv;
 };
 
-#define scanner_log_with_code(scanner, level, log_msg_id, fmt, ...) \
-    xkb_log_with_code((scanner)->ctx, (level), 0, log_msg_id, \
-                    "%s:%zu:%zu: " fmt "\n", \
-                    (scanner)->file_name, \
-                    (scanner)->token_line, \
-                    (scanner)->token_column, ##__VA_ARGS__)
+/* Compute the line:column location for the current token (slow). */
+struct scanner_loc
+scanner_token_location(struct scanner *s);
 
-#define scanner_log(scanner, level, fmt, ...) \
-    xkb_log((scanner)->ctx, (level), 0, \
-            "%s:%zu:%zu: " fmt "\n", \
-            (scanner)->file_name, \
-            (scanner)->token_line, (scanner)->token_column, ##__VA_ARGS__)
+#define scanner_log_with_code(scanner, level, verbosity, log_msg_id, fmt, ...) do { \
+    struct scanner_loc loc = scanner_token_location((scanner));                     \
+    xkb_log_with_code((scanner)->ctx, (level), verbosity, log_msg_id,               \
+                      "%s:%zu:%zu: " fmt "\n",                                      \
+                      (scanner)->file_name,                                         \
+                      loc.line,                                                     \
+                      loc.column, ##__VA_ARGS__);                                   \
+} while(0)
 
-#define scanner_err_with_code(scanner, id, fmt, ...) \
-    scanner_log_with_code(scanner, XKB_LOG_LEVEL_ERROR, id, fmt, ##__VA_ARGS__)
+#define scanner_err(scanner, id, fmt, ...)              \
+    scanner_log_with_code(scanner, XKB_LOG_LEVEL_ERROR, \
+                          XKB_LOG_VERBOSITY_MINIMAL, id, fmt, ##__VA_ARGS__)
 
-#define scanner_err(scanner, fmt, ...) \
-    scanner_log(scanner, XKB_LOG_LEVEL_ERROR, fmt, ##__VA_ARGS__)
+#define scanner_warn(scanner, id, fmt, ...)               \
+    scanner_log_with_code(scanner, XKB_LOG_LEVEL_WARNING, \
+                          XKB_LOG_VERBOSITY_MINIMAL, id, fmt, ##__VA_ARGS__)
 
-#define scanner_warn_with_code(scanner, id, fmt, ...) \
-    scanner_log_with_code(scanner, XKB_LOG_LEVEL_WARNING, id, fmt, ##__VA_ARGS__)
-
-#define scanner_warn(scanner, fmt, ...) \
-    scanner_log(scanner, XKB_LOG_LEVEL_WARNING, fmt, ##__VA_ARGS__)
+#define scanner_vrb(scanner, verbosity, id, fmt, ...)                    \
+    scanner_log_with_code(scanner, XKB_LOG_LEVEL_WARNING, verbosity, id, \
+                          fmt, ##__VA_ARGS__)
 
 static inline void
 scanner_init(struct scanner *s, struct xkb_context *ctx,
@@ -90,8 +107,9 @@ scanner_init(struct scanner *s, struct xkb_context *ctx,
     s->s = string;
     s->len = len;
     s->pos = 0;
-    s->line = s->column = 1;
-    s->token_line = s->token_column = 1;
+    s->token_pos = 0;
+    s->cached_pos = 0;
+    s->cached_loc.line = s->cached_loc.column = 1;
     s->file_name = file_name;
     s->ctx = ctx;
     s->priv = priv;
@@ -122,7 +140,6 @@ scanner_skip_to_eol(struct scanner *s)
 {
     const char *nl = memchr(s->s + s->pos, '\n', s->len - s->pos);
     const size_t new_pos = nl ? (size_t) (nl - s->s) : s->len;
-    s->column += new_pos - s->pos;
     s->pos = new_pos;
 }
 
@@ -131,13 +148,6 @@ scanner_next(struct scanner *s)
 {
     if (unlikely(scanner_eof(s)))
         return '\0';
-    if (unlikely(scanner_eol(s))) {
-        s->line++;
-        s->column = 1;
-    }
-    else {
-        s->column++;
-    }
     return s->s[s->pos++];
 }
 
@@ -146,7 +156,7 @@ scanner_chr(struct scanner *s, char ch)
 {
     if (likely(scanner_peek(s) != ch))
         return false;
-    s->pos++; s->column++;
+    s->pos++;
     return true;
 }
 
@@ -157,7 +167,7 @@ scanner_str(struct scanner *s, const char *string, size_t len)
         return false;
     if (memcmp(s->s + s->pos, string, len) != 0)
         return false;
-    s->pos += len; s->column += len;
+    s->pos += len;
     return true;
 }
 
@@ -184,32 +194,128 @@ scanner_buf_appends(struct scanner *s, const char *str)
 }
 
 static inline bool
+scanner_buf_appends_code_point(struct scanner *s, uint32_t c)
+{
+    /* Up to 4 bytes + NULL */
+    if (s->buf_pos + 5 <= sizeof(s->buf)) {
+        int count = utf32_to_utf8(c, s->buf + s->buf_pos);
+        if (count == 0) {
+            /* Handle encoding failure with U+FFFD REPLACEMENT CHARACTER */
+            count = utf32_to_utf8(0xfffd, s->buf + s->buf_pos);
+        }
+        if (count == 0)
+            return false;
+        /* `count` counts the NULL byte */
+        s->buf_pos += count - 1;
+        return true;
+    } else {
+        return false;
+    }
+}
+
+static inline bool
 scanner_oct(struct scanner *s, uint8_t *out)
 {
-    int i;
-    for (i = 0, *out = 0; scanner_peek(s) >= '0' && scanner_peek(s) <= '7' && i < 3; i++)
+    uint8_t i = 0;
+    uint8_t c = 0;
+    for (; scanner_peek(s) >= '0' && scanner_peek(s) <= '7' && i < 4; i++) {
         /* Test overflow */
-        if (*out < 040) {
-            *out = *out * 8 + scanner_next(s) - '0';
+        if (c < 040) {
+            c = c * 8 + scanner_next(s) - '0';
         } else {
             /* Consume valid digit, but mark result as invalid */
             scanner_next(s);
+            *out = c;
             return false;
         }
+    }
+    *out = c;
     return i > 0;
 }
 
 static inline bool
 scanner_hex(struct scanner *s, uint8_t *out)
 {
-    int i;
+    uint8_t i;
     for (i = 0, *out = 0; is_xdigit(scanner_peek(s)) && i < 2; i++) {
         const char c = scanner_next(s);
-        const char offset = (c >= '0' && c <= '9' ? '0' :
-                             c >= 'a' && c <= 'f' ? 'a' - 10 : 'A' - 10);
+        const char offset = (char) (c >= '0' && c <= '9' ? '0' :
+                                    c >= 'a' && c <= 'f' ? 'a' - 10
+                                                         : 'A' - 10);
         *out = *out * 16 + c - offset;
     }
     return i > 0;
+}
+
+static inline int
+scanner_dec_int64(struct scanner *s, int64_t *out)
+{
+    uint64_t val = 0;
+    const int count =
+        parse_dec_to_uint64_t(s->s + s->pos, s->len - s->pos, &val);
+    if (count > 0) {
+        /*
+         * NOTE: Since the sign is handled as a token, we parse only *positive*
+         *       values here. So that means that *we cannot parse INT64_MIN*,
+         *       because abs(INT64_MIN) > INT64_MAX. But we use 64-bit integers
+         *       only to avoid under/overflow in expressions: we do not use
+         *       64-bit integers in the keymap, only up to 32 bits. So we expect
+         *       to parse only 32 bits integers in realistic keymap files and
+         *       the limitation should not be an issue.
+         */
+        if (val > INT64_MAX)
+            return -1;
+        s->pos += count;
+        *out = (int64_t) val;
+    }
+    return count;
+}
+
+static inline int
+scanner_hex_int64(struct scanner *s, int64_t *out)
+{
+    uint64_t val = 0;
+    const int count =
+        parse_hex_to_uint64_t(s->s + s->pos, s->len - s->pos, &val);
+    if (count > 0) {
+        /* See comment in `scanner_dec_int64()` above */
+        if (val > INT64_MAX)
+            return -1;
+        s->pos += count;
+        *out = (int64_t) val;
+    }
+    return count;
+}
+
+/** Parser for the {NNNN} part of a Unicode escape sequences */
+static inline bool
+scanner_unicode_code_point(struct scanner *s, uint32_t *out)
+{
+    if (!scanner_chr(s, '{'))
+        return false;
+
+    uint32_t cp = 0;
+    const int count =
+        parse_hex_to_uint32_t(s->s + s->pos, s->len - s->pos, &cp);
+    if (count > 0)
+        s->pos += count;
+
+    /* Try to consume everything within the string until the next `}` */
+    const size_t last_valid = s->pos;
+    while (!scanner_eof(s) && !scanner_eol(s) && scanner_peek(s) != '"' &&
+           scanner_peek(s) != '}') {
+        scanner_next(s);
+    }
+
+    if (scanner_chr(s, '}')) {
+        /* End of the escape sequence; code point may be invalid */
+        *out = cp;
+        return (count > 0 && s->pos == last_valid + 1 && cp <= 0x10ffff);
+    }
+
+    /* No closing `}` within the string: rollback to last valid position */
+    s->pos = last_valid;
+    return false;
 }
 
 /* Basic detection of wrong character encoding based on the first bytes */
@@ -225,20 +331,18 @@ scanner_check_supported_char_encoding(struct scanner *scanner)
 
     /* Early detection of wrong file encoding, e.g. UTF-16 or UTF-32 */
     if (scanner->s[0] == '\0' || scanner->s[1] == '\0') {
-        if (scanner->s[0] != '\0')
-            scanner->token_column++;
-        scanner_err(scanner, "unexpected NULL character.");
+        scanner_err(scanner, XKB_ERROR_INVALID_FILE_ENCODING,
+                    "unexpected NULL character.");
         return false;
     }
     /* Enforce the first character to be ASCII.
        See the note before the use of this function, that explains the relevant
        parts of the grammars of rules, keymap components and Compose. */
     if (!is_ascii(scanner->s[0])) {
-        scanner_err(scanner, "unexpected non-ASCII character.");
+        scanner_err(scanner, XKB_ERROR_INVALID_FILE_ENCODING,
+                    "unexpected non-ASCII character.");
         return false;
     }
 
     return true;
 }
-
-#endif

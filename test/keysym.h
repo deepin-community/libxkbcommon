@@ -1,5 +1,15 @@
-#ifndef KEYSYM_TEST_H
-#define KEYSYM_TEST_H
+/*
+ * NOTE: This file has been generated automatically by “scripts/update-keysyms-derived-headers.py”.
+ *       Do not edit manually!
+ */
+
+/*
+ * Copyright © 2024 Pierre Le Marre <dev@wismill.eu>
+ * SPDX-License-Identifier: MIT
+ */
+#pragma once
+
+#include "config.h"
 
 #include "xkbcommon/xkbcommon.h"
 #include "xkbcommon/xkbcommon-keysyms.h"
@@ -353,5 +363,3 @@ ambiguous_icase_ks_names[] = {
     { XKB_KEY_uhorn, 2, { "Uhorn", "uhorn" } },
     { XKB_KEY_XF86Screensaver, 2, { "XF86ScreenSaver", "XF86Screensaver" } }
 };
-
-#endif

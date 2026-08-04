@@ -1,12 +1,8 @@
 /*
  * Copyright (c) 1999-2002 Vojtech Pavlik
- *
- * This program is free software; you can redistribute it and/or modify it
- * under the terms of the GNU General Public License version 2 as published by
- * the Free Software Foundation.
+ * SPDX-License-Identifier: GPL-2.0-only
  */
-#ifndef _INPUT_H
-#define _INPUT_H
+#pragma once
 
 /*
  * Copied from /usr/include/linux/input.h from Linux 3.16, for use
@@ -583,5 +579,3 @@
 #define KEY_MIN_INTERESTING	KEY_MUTE
 #define KEY_MAX			0x2ff
 #define KEY_CNT			(KEY_MAX+1)
-
-#endif /* _INPUT_H */

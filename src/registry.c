@@ -1,28 +1,11 @@
 /*
  * Copyright © 2020 Red Hat, Inc.
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "config.h"
 
+#include <assert.h>
 #include <sys/stat.h>
 #include <fcntl.h>
 #include <stdbool.h>
@@ -31,14 +14,21 @@
 #include <stdint.h>
 #include <libxml/parser.h>
 
+#if HAVE_XKB_EXTENSIONS_DIRECTORIES
+    #include <limits.h>
+    #if HAVE_UNISTD_H && HAVE_DIRENT_H
+        #include <dirent.h>
+        #include <unistd.h>
+    #endif
+#endif
+
 #include "xkbcommon/xkbregistry.h"
+#include "messages-codes.h"
 #include "utils.h"
 #include "util-list.h"
 #include "util-mem.h"
 
 struct rxkb_object;
-
-typedef void (*destroy_func_t)(struct rxkb_object *object);
 
 /**
  * All our objects are refcounted and are linked to iterate through them.
@@ -49,7 +39,6 @@ struct rxkb_object {
     struct rxkb_object *parent;
     uint32_t refcount;
     struct list link;
-    destroy_func_t destroy;
 };
 
 struct rxkb_iso639_code {
@@ -129,6 +118,7 @@ struct rxkb_option {
     char *brief;
     char *description;
     enum rxkb_popularity popularity;
+    bool layout_specific;
 };
 
 static bool
@@ -156,38 +146,46 @@ rxkb_log(struct rxkb_context *ctx, enum rxkb_log_level level,
  * format is supplied without arguments. Not supplying it would still
  * result in an error, though.
  */
+#define rxkb_log_with_code(ctx, level, msg_id, fmt, ...) \
+    rxkb_log(ctx, level, PREPEND_MESSAGE_ID(msg_id, fmt), ##__VA_ARGS__)
 #define log_dbg(ctx, ...) \
     rxkb_log((ctx), RXKB_LOG_LEVEL_DEBUG, __VA_ARGS__)
-#define log_info(ctx, ...) \
-    rxkb_log((ctx), RXKB_LOG_LEVEL_INFO, __VA_ARGS__)
-#define log_warn(ctx, ...) \
-    rxkb_log((ctx), RXKB_LOG_LEVEL_WARNING,  __VA_ARGS__)
-#define log_err(ctx, ...) \
-    rxkb_log((ctx), RXKB_LOG_LEVEL_ERROR,  __VA_ARGS__)
-#define log_wsgo(ctx, ...) \
-    rxkb_log((ctx), RXKB_LOG_LEVEL_CRITICAL, __VA_ARGS__)
+#define log_info(ctx, id, ...) \
+    rxkb_log_with_code((ctx), RXKB_LOG_LEVEL_INFO, id, __VA_ARGS__)
+#define log_warn(ctx, id, ...) \
+    rxkb_log_with_code((ctx), RXKB_LOG_LEVEL_WARNING, id, __VA_ARGS__)
+#define log_err(ctx, id, ...) \
+    rxkb_log_with_code((ctx), RXKB_LOG_LEVEL_ERROR, id, __VA_ARGS__)
+#define log_wsgo(ctx, id, ...) \
+    rxkb_log_with_code((ctx), RXKB_LOG_LEVEL_CRITICAL, id, __VA_ARGS__)
 
 
 #define DECLARE_REF_UNREF_FOR_TYPE(type_) \
-XKB_EXPORT struct type_ * type_##_ref(struct type_ *object) { \
+struct type_ * type_##_ref(struct type_ *object) { \
     rxkb_object_ref(&object->base); \
     return object; \
 } \
-XKB_EXPORT struct type_ * type_##_unref(struct type_ *object) { \
+struct type_ * type_##_unref(struct type_ *object) { \
     if (!object) return NULL; \
-    return rxkb_object_unref(&object->base); \
+    assert(object->base.refcount >= 1); \
+    if (--object->base.refcount == 0) {\
+        type_##_destroy(object); \
+        list_remove(&object->base.link);\
+        free(object); \
+    } \
+    return NULL;\
 }
 
 #define DECLARE_CREATE_FOR_TYPE(type_) \
 static inline struct type_ * type_##_create(struct rxkb_object *parent) { \
     struct type_ *t = calloc(1, sizeof *t); \
     if (t) \
-        rxkb_object_init(&t->base, parent, (destroy_func_t)type_##_destroy); \
+        rxkb_object_init(&t->base, parent); \
     return t; \
 }
 
 #define DECLARE_TYPED_GETTER_FOR_TYPE(type_, field_, rtype_) \
-XKB_EXPORT rtype_ type_##_get_##field_(struct type_ *object) { \
+rtype_ type_##_get_##field_(struct type_ *object) { \
     return object->field_; \
 }
 
@@ -195,13 +193,13 @@ XKB_EXPORT rtype_ type_##_get_##field_(struct type_ *object) { \
    DECLARE_TYPED_GETTER_FOR_TYPE(type_, field_, const char*)
 
 #define DECLARE_FIRST_NEXT_FOR_TYPE(type_, parent_type_, parent_field_) \
-XKB_EXPORT struct type_ * type_##_first(struct parent_type_ *parent) { \
+struct type_ * type_##_first(struct parent_type_ *parent) { \
     struct type_ *o = NULL; \
     if (!list_empty(&parent->parent_field_)) \
         o = list_first_entry(&parent->parent_field_, o, base.link); \
     return o; \
 } \
-XKB_EXPORT struct type_ * \
+struct type_ * \
 type_##_next(struct type_ *o) \
 { \
     struct parent_type_ *parent; \
@@ -214,21 +212,11 @@ type_##_next(struct type_ *o) \
 }
 
 static void
-rxkb_object_init(struct rxkb_object *object, struct rxkb_object *parent, destroy_func_t destroy)
+rxkb_object_init(struct rxkb_object *object, struct rxkb_object *parent)
 {
     object->refcount = 1;
-    object->destroy = destroy;
     object->parent = parent;
     list_init(&object->link);
-}
-
-static void
-rxkb_object_destroy(struct rxkb_object *object)
-{
-    if (object->destroy)
-        object->destroy(object);
-    list_remove(&object->link);
-    free(object);
 }
 
 static void *
@@ -239,22 +227,13 @@ rxkb_object_ref(struct rxkb_object *object)
     return object;
 }
 
-static void *
-rxkb_object_unref(struct rxkb_object *object)
-{
-    assert(object->refcount >= 1);
-    if (--object->refcount == 0)
-        rxkb_object_destroy(object);
-    return NULL;
-}
-
 static void
 rxkb_iso639_code_destroy(struct rxkb_iso639_code *code)
 {
     free(code->code);
 }
 
-XKB_EXPORT struct rxkb_iso639_code *
+struct rxkb_iso639_code *
 rxkb_layout_get_iso639_first(struct rxkb_layout *layout)
 {
     struct rxkb_iso639_code *code = NULL;
@@ -265,7 +244,7 @@ rxkb_layout_get_iso639_first(struct rxkb_layout *layout)
     return code;
 }
 
-XKB_EXPORT struct rxkb_iso639_code *
+struct rxkb_iso639_code *
 rxkb_iso639_code_next(struct rxkb_iso639_code *code)
 {
     struct rxkb_iso639_code *next = NULL;
@@ -291,7 +270,7 @@ rxkb_iso3166_code_destroy(struct rxkb_iso3166_code *code)
     free(code->code);
 }
 
-XKB_EXPORT struct rxkb_iso3166_code *
+struct rxkb_iso3166_code *
 rxkb_layout_get_iso3166_first(struct rxkb_layout *layout)
 {
     struct rxkb_iso3166_code *code = NULL;
@@ -302,7 +281,7 @@ rxkb_layout_get_iso3166_first(struct rxkb_layout *layout)
     return code;
 }
 
-XKB_EXPORT struct rxkb_iso3166_code *
+struct rxkb_iso3166_code *
 rxkb_iso3166_code_next(struct rxkb_iso3166_code *code)
 {
     struct rxkb_iso3166_code *next = NULL;
@@ -336,6 +315,9 @@ DECLARE_GETTER_FOR_TYPE(rxkb_option, name);
 DECLARE_GETTER_FOR_TYPE(rxkb_option, brief);
 DECLARE_GETTER_FOR_TYPE(rxkb_option, description);
 DECLARE_TYPED_GETTER_FOR_TYPE(rxkb_option, popularity, enum rxkb_popularity);
+bool rxkb_option_is_layout_specific(struct rxkb_option *object) {
+    return object->layout_specific;
+}
 DECLARE_FIRST_NEXT_FOR_TYPE(rxkb_option, rxkb_option_group, options);
 
 static void
@@ -395,7 +377,7 @@ rxkb_option_group_destroy(struct rxkb_option_group *og)
     }
 }
 
-XKB_EXPORT bool
+bool
 rxkb_option_group_allows_multiple(struct rxkb_option_group *g)
 {
     return g->allow_multiple;
@@ -450,7 +432,7 @@ rxkb_context_getenv(struct rxkb_context *ctx, const char *name)
 }
 
 
-XKB_EXPORT void
+void
 rxkb_context_set_log_level(struct rxkb_context *ctx,
                            enum rxkb_log_level level)
 {
@@ -510,7 +492,7 @@ log_level(const char *level) {
     return RXKB_LOG_LEVEL_ERROR;
 }
 
-XKB_EXPORT struct rxkb_context *
+struct rxkb_context *
 rxkb_context_new(enum rxkb_context_flags flags)
 {
     struct rxkb_context *ctx = rxkb_context_create(NULL);
@@ -536,6 +518,10 @@ rxkb_context_new(enum rxkb_context_flags flags)
 
     if (!(flags & RXKB_CONTEXT_NO_DEFAULT_INCLUDES) &&
         !rxkb_context_include_path_append_default(ctx)) {
+        log_err(ctx, XKB_ERROR_NO_VALID_DEFAULT_INCLUDE_PATH,
+                "Failed to add any default include path "
+                "(default system path: %s)\n",
+                DFLT_XKB_CONFIG_ROOT);
         rxkb_context_unref(ctx);
         return NULL;
     }
@@ -543,7 +529,7 @@ rxkb_context_new(enum rxkb_context_flags flags)
     return ctx;
 }
 
-XKB_EXPORT void
+void
 rxkb_context_set_log_fn(struct rxkb_context *ctx,
                         void (*log_fn)(struct rxkb_context *ctx,
                                        enum rxkb_log_level level,
@@ -552,60 +538,186 @@ rxkb_context_set_log_fn(struct rxkb_context *ctx,
     ctx->log_fn = (log_fn ? log_fn : default_log_fn);
 }
 
-XKB_EXPORT bool
+bool
 rxkb_context_include_path_append(struct rxkb_context *ctx, const char *path)
 {
-    struct stat stat_buf;
-    int err;
-    char *tmp = NULL;
-    char rules[PATH_MAX];
+    int err = 0;
 
     if (ctx->context_state != CONTEXT_NEW) {
-        log_err(ctx, "include paths can only be appended to a new context\n");
-        return false;
+        log_err(ctx, XKB_LOG_MESSAGE_NO_ID,
+                "include paths can only be appended to a new context\n");
+        goto error;
     }
 
+    struct stat stat_buf;
     err = stat(path, &stat_buf);
-    if (err != 0)
-        return false;
-    if (!S_ISDIR(stat_buf.st_mode))
-        return false;
+    if (err != 0) {
+        err = errno;
+        goto error;
+    }
+    if (!S_ISDIR(stat_buf.st_mode)) {
+        err = ENOTDIR;
+        goto error;
+    }
 
-    if (!check_eaccess(path, R_OK | X_OK))
-        return false;
+    if (!check_eaccess(path, R_OK | X_OK)) {
+        err = EACCES;
+        goto error;
+    }
 
-    /* Pre-filter for the 99.9% case - if we can't assemble the default ruleset
+    /*
+     * Pre-filter for the 99.9% case - if we can’t assemble the default ruleset
      * path, complain here instead of during parsing later. The niche cases
-     * where this is the wrong behaviour aren't worth worrying about.
+     * where this is the wrong behaviour aren’t worth worrying about.
      */
+    char rules[PATH_MAX];
     if (!snprintf_safe(rules, sizeof(rules), "%s/rules/%s.xml",
-                       path, DEFAULT_XKB_RULES))
-        return false;
+                       path, DEFAULT_XKB_RULES)) {
+        log_err(ctx, XKB_ERROR_INVALID_PATH,
+                "Path is too long: expected max length of %zu, "
+                "got: %s/rules/%s.xml\n",
+                sizeof(rules), path, DEFAULT_XKB_RULES);
+        goto error;
+    }
 
-    tmp = strdup(path);
-    if (!tmp)
-        return false;
+    char * const tmp = strdup(path);
+    if (!tmp) {
+        err = ENOMEM;
+        goto error;
+    }
 
     darray_append(ctx->includes, tmp);
+    /* Use “info” log level to facilitate bug reporting. */
+    log_info(ctx, XKB_LOG_MESSAGE_NO_ID, "Include path added: %s\n", tmp);
 
     return true;
+
+error:
+    /*
+     * This error is not fatal because some valid paths may still be defined.
+     * Use “info” log level to facilitate bug reporting.
+     */
+    log_info(ctx, XKB_LOG_MESSAGE_NO_ID,
+             "Include path failed: \"%s\" (%s)\n", path, strerror(err));
+    return false;
 }
 
-XKB_EXPORT bool
+#ifdef HAVE_XKB_EXTENSIONS_DIRECTORIES
+
+static int
+compare_str(const void *a, const void *b)
+{
+    return strcmp(*(char **)a, *(char **) b);
+}
+
+static int
+add_direct_subdirectories(struct rxkb_context *ctx, const char *path,
+                          darray_string *extensions,
+                          darray_size_t versioned_count,
+                          size_t versioned_path_length)
+{
+    int ret = 0;
+    int err = ENOMEM;
+    DIR *dir = NULL;
+
+    /* Check extensions parent directory */
+    struct stat stat_buf;
+    err = stat(path, &stat_buf);
+    if (err != 0) {
+        err = errno;
+        goto err;
+    }
+    if (!S_ISDIR(stat_buf.st_mode)) {
+        err = ENOTDIR;
+        goto err;
+    }
+    if (!check_eaccess(path, R_OK | X_OK)) {
+        err = EACCES;
+        goto err;
+    }
+
+    dir = opendir(path);
+    if (dir == NULL) {
+        err = EACCES;
+        goto err;
+    }
+
+    struct dirent *entry;
+    char path_buf[PATH_MAX] = "";
+    versioned_path_length++; /* Additional final ‘/’ */
+    while ((entry = readdir(dir)) != NULL) {
+        const char *name = entry->d_name;
+
+        /* Skip special entries */
+        if (strcmp(name, ".") == 0 || strcmp(name, "..") == 0)
+            continue;
+
+        if (!snprintf_safe(path_buf, sizeof(path_buf), "%s/%s", path, name)) {
+            err = ENOMEM;
+            goto err;
+        }
+        if (stat(path_buf, &stat_buf) != 0 || !S_ISDIR(stat_buf.st_mode))
+            continue;
+
+        /* Skip if the corresponding versioned directory is already included */
+        for (darray_size_t i = 0; i < versioned_count; i++) {
+            const char * const prev_name = darray_item(*extensions, i)
+                                         + versioned_path_length;
+            if (strcmp(name, prev_name) == 0)
+                goto next;
+        }
+
+        char *ext_path = strdup_safe(path_buf);
+        if (!ext_path) {
+            err = ENOMEM;
+            goto err;
+        }
+
+        darray_append(*extensions, ext_path);
+next:
+    {} /* Label at end of compound statement is a C23 extension */
+    }
+
+    closedir(dir);
+
+    if (darray_size(*extensions) > versioned_count) {
+        /* Sort the entries, so that they are appended in lexicographic order */
+        qsort(darray_items(*extensions) + versioned_count,
+              darray_size(*extensions) - versioned_count,
+              sizeof(*darray_items(*extensions)), &compare_str);
+        char **ext_path;
+        darray_foreach_from(ext_path, *extensions, versioned_count) {
+            ret |= rxkb_context_include_path_append(ctx, *ext_path);
+        }
+    }
+
+    return ret;
+
+err:
+    log_dbg(ctx,
+            "Include extensions path failed: %s (%s)\n", path, strerror(err));
+    if (dir)
+        closedir(dir);
+
+    return ret;
+}
+#endif
+
+bool
 rxkb_context_include_path_append_default(struct rxkb_context *ctx)
 {
-    const char *home, *xdg, *root, *extra;
     char user_path[PATH_MAX];
     bool ret = false;
 
     if (ctx->context_state != CONTEXT_NEW) {
-        log_err(ctx, "include paths can only be appended to a new context\n");
+        log_err(ctx, XKB_LOG_MESSAGE_NO_ID,
+                "include paths can only be appended to a new context\n");
         return false;
     }
 
-    home = rxkb_context_getenv(ctx, "HOME");
-
-    xdg = rxkb_context_getenv(ctx, "XDG_CONFIG_HOME");
+    const char * const home = rxkb_context_getenv(ctx, "HOME");
+    const char * const xdg = rxkb_context_getenv(ctx, "XDG_CONFIG_HOME");
+    /* Accept empty string, which may be unintentional and should be reported */
     if (xdg != NULL) {
         if (snprintf_safe(user_path, sizeof(user_path), "%s/xkb", xdg))
             ret |= rxkb_context_include_path_append(ctx, user_path);
@@ -620,35 +732,105 @@ rxkb_context_include_path_append_default(struct rxkb_context *ctx)
             ret |= rxkb_context_include_path_append(ctx, user_path);
     }
 
-    extra = rxkb_context_getenv(ctx, "XKB_CONFIG_EXTRA_PATH");
-    if (extra != NULL)
-        ret |= rxkb_context_include_path_append(ctx, extra);
-    else
-        ret |= rxkb_context_include_path_append(ctx, DFLT_XKB_CONFIG_EXTRA_PATH);
+    const char * const extra = rxkb_context_getenv(ctx, "XKB_CONFIG_EXTRA_PATH");
+    /*
+     * Only use default if path is undefined, but accept empty string, which may
+     * be unintentional and should be reported.
+     */
+    ret |= rxkb_context_include_path_append(
+        ctx, ((extra != NULL) ? extra : DFLT_XKB_CONFIG_EXTRA_PATH)
+    );
 
-    root = rxkb_context_getenv(ctx, "XKB_CONFIG_ROOT");
-    if (root != NULL)
-        ret |= rxkb_context_include_path_append(ctx, root);
-    else
-        ret |= rxkb_context_include_path_append(ctx, DFLT_XKB_CONFIG_ROOT);
+#ifdef HAVE_XKB_EXTENSIONS_DIRECTORIES
+    darray_string extensions = darray_new();
+
+    /* Versioned extensions directory */
+    const char *extensions_path =
+        rxkb_context_getenv(ctx, "XKB_CONFIG_VERSIONED_EXTENSIONS_PATH");
+#ifdef DFLT_XKB_CONFIG_VERSIONED_EXTENSIONS_PATH
+    if (extensions_path == NULL)
+        extensions_path = DFLT_XKB_CONFIG_VERSIONED_EXTENSIONS_PATH;
+#endif
+    size_t versioned_path_length = 0;
+    if (extensions_path != NULL) {
+        /* Add direct subdirectories */
+        ret |= add_direct_subdirectories(ctx, extensions_path,
+                                         &extensions, 0, 0);
+        versioned_path_length = strlen(extensions_path);
+    }
+
+    /* Unversioned extensions directory */
+    extensions_path =
+        rxkb_context_getenv(ctx, "XKB_CONFIG_UNVERSIONED_EXTENSIONS_PATH");
+#ifdef DFLT_XKB_CONFIG_UNVERSIONED_EXTENSIONS_PATH
+    if (extensions_path == NULL)
+        extensions_path = DFLT_XKB_CONFIG_UNVERSIONED_EXTENSIONS_PATH;
+#endif
+    if (extensions_path != NULL) {
+        /*
+         * Add direct subdirectories, except those already added from the
+         * *versioned* extensions path hereinabove.
+         */
+        ret |= add_direct_subdirectories(ctx, extensions_path, &extensions,
+                                         darray_size(extensions),
+                                         versioned_path_length);
+    }
+
+    char **ext_path;
+    darray_foreach(ext_path, extensions) {
+        free(*ext_path);
+    }
+    darray_free(extensions);
+#endif
+
+    /* Canonical XKB root */
+    const char * const root = rxkb_context_getenv(ctx, "XKB_CONFIG_ROOT");
+    /*
+     * Only use default if path is undefined, but accept empty string, which may
+     * be unintentional and should be reported.
+     */
+    const bool has_root = rxkb_context_include_path_append(
+        ctx, ((root != NULL) ? root: DFLT_XKB_CONFIG_ROOT)
+    );
+    ret |= has_root;
+
+    /*
+     * Fallback for misconfigured setups.
+     * Some setups use the assumption that the canonical XKB root is always the
+     * legacy X11 one, but this is no longer true since xkeyboard-config 2.45,
+     * where the X11 path is now a mere symlink to a dedicated xkeyboard-config
+     * data directory.
+     * This fallback can still be skipped if deliberately using an empty string
+     * for the canonical XKB root hereinabove.
+     */
+    if (!has_root && (root == NULL || root[0] != '\0')) {
+        log_warn(ctx, XKB_LOG_MESSAGE_NO_ID,
+                 "Root include path failed; fallback to \"%s\". "
+                 "The setup is probably misconfigured. "
+                 "Please ensure that \"%s\" is available in the environment.\n",
+                 DFLT_XKB_LEGACY_ROOT,
+                 ((root == NULL) ? DFLT_XKB_CONFIG_ROOT : root));
+        ret |= rxkb_context_include_path_append(ctx, DFLT_XKB_LEGACY_ROOT);
+    }
 
     return ret;
 }
 
-XKB_EXPORT bool
+bool
 rxkb_context_parse_default_ruleset(struct rxkb_context *ctx)
 {
     return rxkb_context_parse(ctx, DEFAULT_XKB_RULES);
 }
 
-XKB_EXPORT bool
+bool
 rxkb_context_parse(struct rxkb_context *ctx, const char *ruleset)
 {
     char **path;
     bool success = false;
 
     if (ctx->context_state != CONTEXT_NEW) {
-        log_err(ctx, "parse must only be called on a new context\n");
+        log_err(ctx, XKB_LOG_MESSAGE_NO_ID,
+                "parse must only be called on a new context\n");
         return false;
     }
 
@@ -677,13 +859,13 @@ rxkb_context_parse(struct rxkb_context *ctx, const char *ruleset)
 }
 
 
-XKB_EXPORT void
+void
 rxkb_context_set_user_data(struct rxkb_context *ctx, void *userdata)
 {
     ctx->userdata = userdata;
 }
 
-XKB_EXPORT void *
+void *
 rxkb_context_get_user_data(struct rxkb_context *ctx)
 {
     return ctx->userdata;
@@ -716,6 +898,7 @@ struct config_item {
     char *brief;
     char *vendor;
     enum rxkb_popularity popularity;
+    bool layout_specific;
 };
 
 #define config_item_new(popularity_) { \
@@ -723,7 +906,8 @@ struct config_item {
     .description = NULL, \
     .brief = NULL, \
     .vendor = NULL, \
-    .popularity = popularity_ \
+    .popularity = (popularity_), \
+    .layout_specific = false \
 }
 
 static void
@@ -751,12 +935,20 @@ parse_config_item(struct rxkb_context *ctx, xmlNode *parent,
                 else if (xmlStrEqual(raw_popularity, (const xmlChar*)"exotic"))
                     config->popularity = RXKB_POPULARITY_EXOTIC;
                 else
-                    log_err(ctx,
-                            "xml:%d: invalid popularity attribute: expected "
+                    log_err(ctx, XKB_LOG_MESSAGE_NO_ID,
+                            "xml:%u: invalid popularity attribute: expected "
                             "'standard' or 'exotic', got: '%s'\n",
                             ci->line, raw_popularity);
             }
             xmlFree(raw_popularity);
+
+            /* Note: this is only useful for options */
+            xmlChar *raw_layout_specific =
+                xmlGetProp(ci, (const xmlChar*)"layout-specific");
+            if (raw_layout_specific &&
+                xmlStrEqual(raw_layout_specific, (const xmlChar*)"true"))
+                config->layout_specific = true;
+            xmlFree(raw_layout_specific);
 
             /* Process children */
             for (node = ci->children; node; node = node->next) {
@@ -773,7 +965,8 @@ parse_config_item(struct rxkb_context *ctx, xmlNode *parent,
             }
 
             if (!config->name || !strlen(config->name))  {
-                log_err(ctx, "xml:%d: missing required element 'name'\n",
+                log_err(ctx, XKB_LOG_MESSAGE_NO_ID,
+                        "xml:%u: missing required element 'name'\n",
                         ci->line);
                 config_item_free(config);
                 return false;
@@ -884,7 +1077,8 @@ parse_variant(struct rxkb_context *ctx, struct rxkb_layout *l,
         bool exists = false;
 
         list_for_each(v, &ctx->layouts, base.link) {
-            if (streq(v->name, config.name) && streq(v->name, l->name)) {
+            if (streq_null(v->variant, config.name) &&
+                streq(v->name, l->name)) {
                 exists = true;
                 break;
             }
@@ -1038,6 +1232,7 @@ parse_option(struct rxkb_context *ctx, struct rxkb_option_group *group,
         o->name = steal(&config.name);
         o->description = steal(&config.description);
         o->popularity = config.popularity;
+        o->layout_specific = config.layout_specific;
         list_append(&group->options, &o->base.link);
     }
 }
@@ -1133,7 +1328,8 @@ xml_error_func(void *ctx, const char *msg, ...)
 
     /* This shouldn't really happen */
     if (rc < 0) {
-        log_err(ctx, "+++ out of cheese error. redo from start +++\n");
+        log_err(ctx, XKB_ERROR_INSUFFICIENT_BUFFER_SIZE,
+                "+++ out of cheese error. redo from start +++\n");
         slen = 0;
         memset(buf, 0, sizeof(buf));
         return;
@@ -1148,19 +1344,30 @@ xml_error_func(void *ctx, const char *msg, ...)
 
     /* We're assuming here that the last character is \n. */
     if (buf[slen - 1] == '\n') {
-        log_err(ctx, "%s", buf);
+        log_err(ctx, XKB_LOG_MESSAGE_NO_ID, "%s", buf);
         memset(buf, 0, sizeof(buf));
         slen = 0;
     }
 }
 
+#ifdef HAVE_XML_CTXT_SET_ERRORHANDLER
+static void
+xml_structured_error_func(void *userData, const xmlError * error)
+{
+    xmlFormatError(error, xml_error_func, userData);
+}
+#endif
+
+#ifdef XML_PARSE_NO_XXE
+#define _XML_OPTIONS (XML_PARSE_NONET | XML_PARSE_NOENT | XML_PARSE_NO_XXE)
+#else
+#define _XML_OPTIONS (XML_PARSE_NONET)
+#endif
+
 static bool
 validate(struct rxkb_context *ctx, xmlDoc *doc)
 {
     bool success = false;
-    xmlValidCtxt *dtdvalid = NULL;
-    xmlDtd *dtd = NULL;
-    xmlParserInputBufferPtr buf = NULL;
     /* This is a modified version of the xkeyboard-config xkb.dtd:
      * • xkeyboard-config requires modelList, layoutList and optionList,
      *   but we allow for any of those to be missing.
@@ -1183,6 +1390,7 @@ validate(struct rxkb_context *ctx, xmlDoc *doc)
         "<!ATTLIST group allowMultipleSelection (true|false) \"false\">\n"
         "<!ELEMENT option (configItem)>\n"
         "<!ELEMENT configItem (name, shortDescription?, description?, vendor?, countryList?, languageList?, hwList?)>\n"
+        "<!ATTLIST configItem layout-specific (true|false) \"false\">\n"
         "<!ATTLIST configItem popularity (standard|exotic) #IMPLIED>\n"
         "<!ELEMENT name (#PCDATA)>\n"
         "<!ELEMENT shortDescription (#PCDATA)>\n"
@@ -1195,28 +1403,53 @@ validate(struct rxkb_context *ctx, xmlDoc *doc)
         "<!ELEMENT hwList (hwId+)>\n"
         "<!ELEMENT hwId (#PCDATA)>\n";
 
+#ifdef HAVE_XML_CTXT_PARSE_DTD
+    /* Use safer function with context if available, and set
+     * the contextual error handler. */
+    xmlParserCtxtPtr xmlCtxt = xmlNewParserCtxt();
+    if (!xmlCtxt)
+        return false;
+    xmlCtxtSetErrorHandler(xmlCtxt, xml_structured_error_func, ctx);
+    xmlCtxtSetOptions(xmlCtxt, _XML_OPTIONS | XML_PARSE_DTDLOAD);
+
+    xmlParserInputPtr pinput =
+        xmlNewInputFromMemory(NULL, dtdstr, ARRAY_SIZE(dtdstr) - 1,
+                              XML_INPUT_BUF_STATIC);
+    if (!pinput)
+        goto dtd_error;
+
+    xmlDtd *dtd = xmlCtxtParseDtd(xmlCtxt, pinput, NULL, NULL);
+#else
     /* Note: do not use xmlParserInputBufferCreateStatic, it generates random
      * DTD validity errors for unknown reasons */
-    buf = xmlParserInputBufferCreateMem(dtdstr, sizeof(dtdstr),
-                                        XML_CHAR_ENCODING_UTF8);
+    xmlParserInputBufferPtr buf =
+        xmlParserInputBufferCreateMem(dtdstr, ARRAY_SIZE(dtdstr) - 1,
+                                      XML_CHAR_ENCODING_NONE);
     if (!buf)
-        return false;
+        goto dtd_error;
+    xmlDtd *dtd = xmlIOParseDTD(NULL, buf, XML_CHAR_ENCODING_UTF8);
+#endif
 
-    dtd = xmlIOParseDTD(NULL, buf, XML_CHAR_ENCODING_UTF8);
     if (!dtd) {
-        log_err(ctx, "Failed to load DTD\n");
-        return false;
+        log_err(ctx, XKB_LOG_MESSAGE_NO_ID, "Failed to load DTD\n");
+        goto dtd_error;
     }
 
-    dtdvalid = xmlNewValidCtxt();
-    if (xmlValidateDtd(dtdvalid, doc, dtd))
-        success = true;
-
-    if (dtd)
-        xmlFreeDtd(dtd);
+#ifdef HAVE_XML_CTXT_PARSE_DTD
+    success = xmlCtxtValidateDtd(xmlCtxt, doc, dtd);
+#else
+    xmlValidCtxt *dtdvalid = xmlNewValidCtxt();
+    success = xmlValidateDtd(dtdvalid, doc, dtd);
     if (dtdvalid)
         xmlFreeValidCtxt(dtdvalid);
+#endif
 
+    xmlFreeDtd(dtd);
+
+dtd_error:
+#ifdef HAVE_XML_CTXT_PARSE_DTD
+    xmlFreeParserCtxt(xmlCtxt);
+#endif
     return success;
 }
 
@@ -1233,23 +1466,61 @@ parse(struct rxkb_context *ctx, const char *path,
 
     LIBXML_TEST_VERSION
 
-    xmlSetGenericErrorFunc(ctx, xml_error_func);
-
-    doc = xmlParseFile(path);
-    if (!doc)
+    xmlParserCtxtPtr xmlCtxt = xmlNewParserCtxt();
+    if (!xmlCtxt)
         return false;
 
+#ifdef XML_PARSE_NO_XXE
+#define _XML_OPTIONS (XML_PARSE_NONET | XML_PARSE_NOENT | XML_PARSE_NO_XXE)
+#else
+#define _XML_OPTIONS (XML_PARSE_NONET)
+#endif
+    xmlCtxtUseOptions(xmlCtxt, _XML_OPTIONS);
+
+#ifdef HAVE_XML_CTXT_SET_ERRORHANDLER
+    /* Prefer contextual handler whenever possible. It takes precedence over
+     * the global generic handler. */
+    xmlCtxtSetErrorHandler(xmlCtxt, xml_structured_error_func, ctx);
+#endif
+#ifndef HAVE_XML_CTXT_PARSE_DTD
+    /* This is needed for the DTD validation */
+    xmlSetGenericErrorFunc(ctx, xml_error_func);
+#endif
+
+    doc = xmlCtxtReadFile(xmlCtxt, path, NULL, 0);
+    if (!doc)
+        goto parse_error;
+
     if (!validate(ctx, doc)) {
-        log_err(ctx, "XML error: failed to validate document at %s\n", path);
-        goto error;
+        log_err(ctx, XKB_LOG_MESSAGE_NO_ID,
+                "XML error: failed to validate document at %s\n", path);
+        goto validate_error;
     }
 
     root = xmlDocGetRootElement(doc);
     parse_rules_xml(ctx, root, popularity);
 
     success = true;
-error:
+validate_error:
     xmlFreeDoc(doc);
+parse_error:
+
+#ifndef HAVE_XML_CTXT_PARSE_DTD
+    /*
+     * Reset the default libxml2 error handler to default, because this handler
+     * is global and may be used on an invalid rxkb_context, e.g. *after* the
+     * following sequence:
+     *
+     *     rxkb_context_new();
+     *     rxkb_context_parse();
+     *     rxkb_context_unref();
+     */
+    xmlSetGenericErrorFunc(NULL, NULL);
+#endif
+#ifdef HAVE_XML_CTXT_SET_ERRORHANDLER
+    xmlCtxtSetErrorHandler(xmlCtxt, NULL, NULL);
+#endif
+    xmlFreeParserCtxt(xmlCtxt);
 
     return success;
 }

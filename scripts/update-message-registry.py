@@ -3,10 +3,11 @@
 from __future__ import annotations
 
 import argparse
+import random
+import re
 from dataclasses import astuple, dataclass
 from pathlib import Path
-import re
-from typing import Callable, Generic, Sequence, TypeVar
+from typing import Any, Callable, ClassVar, Generic, Sequence, TypeAlias, TypeVar
 
 import jinja2
 import yaml
@@ -16,14 +17,14 @@ import yaml
 class Version:
     """A semantic version number: MAJOR.MINOR.PATCH."""
 
-    UNKNOWN_VERSION = "ALWAYS"
-    DEFAULT_VERSION = "1.0.0"
+    UNKNOWN_VERSION: ClassVar[str] = "ALWAYS"
+    DEFAULT_VERSION: ClassVar[str] = "1.0.0"
 
     major: int
     minor: int
     patch: int = 0
 
-    def __str__(self):
+    def __str__(self) -> str:
         return ".".join(map(str, astuple(self)))
 
     @classmethod
@@ -31,9 +32,9 @@ class Version:
         if raw_version == cls.UNKNOWN_VERSION:
             raw_version = cls.DEFAULT_VERSION
         version = raw_version.split(".")
-        assert 2 <= len(version) <= 3 and all(
-            n.isdecimal() for n in version
-        ), raw_version
+        assert 2 <= len(version) <= 3 and all(n.isdecimal() for n in version), (
+            raw_version
+        )
         return Version(*map(int, version))
 
 
@@ -47,7 +48,7 @@ class Example:
     after: str | None
 
     @classmethod
-    def parse(cls, entry) -> Example:
+    def parse(cls, entry: dict[str, Any]) -> Example:
         name = entry.get("name")
         assert name, entry
 
@@ -89,7 +90,7 @@ class Entry:
     """
 
     @classmethod
-    def parse(cls, entry) -> Entry:
+    def parse(cls, entry: dict[str, Any]) -> Entry:
         code = entry.get("code")
         assert code is not None and isinstance(code, int) and code > 0, entry
 
@@ -140,9 +141,12 @@ class Entry:
         return f"XKB_{self.type.upper()}_{id}"
 
     @property
-    def message_name(self: Entry):
+    def message_name(self: Entry) -> str:
         """Format the message string identifier for display"""
         return self.id.replace("-", " ").capitalize()
+
+
+Registry: TypeAlias = Sequence[Entry]
 
 
 def prepend_todo(text: str) -> str:
@@ -154,7 +158,7 @@ def prepend_todo(text: str) -> str:
 
 def load_message_registry(
     env: jinja2.Environment, constants: dict[str, int], path: Path
-) -> Sequence[Entry]:
+) -> Registry:
     # Load the message registry YAML file as a Jinja2 template
     registry_template = env.get_template(str(path))
 
@@ -169,22 +173,22 @@ def load_message_registry(
     identifiers: set[str] = set()
     for n, entry in enumerate(message_registry):
         if entry.code in codes:
-            raise ValueError("Duplicated code in entry #{n}: {entry.code}")
+            raise ValueError(f"Duplicated code in entry #{n}: {entry.code}")
         if entry.id in identifiers:
-            raise ValueError("Duplicated identifier in entry #{n}: {entry.id}")
+            raise ValueError(f"Duplicated identifier in entry #{n}: {entry.id}")
         codes.add(entry.code)
         identifiers.add(entry.id)
 
     return message_registry
 
 
-def generate(
-    registry: Sequence[Entry],
+def generate_file(
+    registry: Registry,
     env: jinja2.Environment,
     root: Path,
     file: Path,
     skip_removed: bool = False,
-):
+) -> None:
     """Generate a file from its Jinja2 template and the message registry"""
     template_path = file.with_suffix(f"{file.suffix}.jinja")
     template = env.get_template(str(template_path))
@@ -205,7 +209,7 @@ T = TypeVar("T")
 @dataclass
 class Constant(Generic[T]):
     name: str
-    pattern: re.Pattern
+    pattern: re.Pattern[str]
     conversion: Callable[[str], T]
 
 
@@ -229,6 +233,38 @@ def read_constants(path: Path, patterns: Sequence[Constant[T]]) -> dict[str, T]:
     return constants
 
 
+def generate(
+    args: argparse.Namespace, registry: Registry, jinja_env: jinja2.Environment
+):
+    """
+    Generate the files
+    """
+    generate_file(
+        registry,
+        jinja_env,
+        args.root,
+        Path("src/messages-codes.h"),
+        skip_removed=True,
+    )
+    generate_file(
+        registry, jinja_env, args.root, Path("tools/messages.c"), skip_removed=True
+    )
+    generate_file(registry, jinja_env, args.root, Path("doc/message-registry.md"))
+
+
+def get_new_code(
+    args: argparse.Namespace, registry: Registry, jinja_env: jinja2.Environment
+):
+    """
+    Get a free code
+    """
+    # Get all codes
+    codes = frozenset(entry.code for entry in registry)
+    # Filter free ones
+    free = tuple(code for code in range(args.min, args.max + 1) if code not in codes)
+    print(*random.sample(free, k=args.count))
+
+
 # Root of the project
 ROOT = Path(__file__).parent.parent
 
@@ -240,13 +276,32 @@ parser.add_argument(
     default=ROOT,
     help="Path to the root of the project (default: %(default)s)",
 )
+parser.set_defaults(func=generate)
+subparsers = parser.add_subparsers()
+new_id_parser = subparsers.add_parser("get-new-code", help="Get a new message codes")
+new_id_parser.set_defaults(func=get_new_code)
+new_id_parser.add_argument("--min", type=int, default=1, help="default: %(default)s")
+new_id_parser.add_argument("--max", type=int, default=999, help="default: %(default)s")
+new_id_parser.add_argument("--count", type=int, default=10, help="default: %(default)s")
+generate_parser = subparsers.add_parser("generate", help="Generate files")
 
 args = parser.parse_args()
 
 # Read some constants from libxkbcommon that we need
 constants = read_constants(
     Path(__file__).parent.parent / "src" / "keymap.h",
-    (Constant("XKB_MAX_GROUPS", re.compile("^#define\s+XKB_MAX_GROUPS\s+(\d+)"), int),),
+    (
+        Constant(
+            "XKB_MAX_GROUPS",
+            re.compile(r"^#define\s+XKB_MAX_GROUPS\s+(\d+)"),
+            int,
+        ),
+        Constant(
+            "XKB_MAX_GROUPS_X11",
+            re.compile(r"^#define\s+XKB_MAX_GROUPS_X11\s+(\d+)"),
+            int,
+        ),
+    ),
 )
 
 # Configure Jinja
@@ -264,15 +319,4 @@ message_registry = load_message_registry(
     jinja_env, constants, Path("doc/message-registry.yaml")
 )
 
-# Generate the files
-generate(
-    message_registry,
-    jinja_env,
-    args.root,
-    Path("src/messages-codes.h"),
-    skip_removed=True,
-)
-generate(
-    message_registry, jinja_env, args.root, Path("tools/messages.c"), skip_removed=True
-)
-generate(message_registry, jinja_env, args.root, Path("doc/message-registry.md"))
+args.func(args=args, registry=message_registry, jinja_env=jinja_env)

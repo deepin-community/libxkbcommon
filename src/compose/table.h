@@ -1,32 +1,14 @@
 /*
  * Copyright © 2013,2021 Ran Benita <ran234@gmail.com>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
+#pragma once
 
-#ifndef COMPOSE_COMPOSE_H
-#define COMPOSE_COMPOSE_H
+#include "config.h"
 
 #include "xkbcommon/xkbcommon-compose.h"
-#include "utils.h"
-#include "context.h"
+#include "src/utils.h"
+#include "src/context.h"
 
 /*
  * The compose table data structure is a ternary search tree.
@@ -77,7 +59,8 @@
 
 /* 7 nodes for every potential Unicode character and then some should be
  * enough for all purposes. */
-#define MAX_COMPOSE_NODES (1 << 23)
+#define MAX_COMPOSE_NODES_LOG2 23
+#define MAX_COMPOSE_NODES (1u << MAX_COMPOSE_NODES_LOG2)
 
 struct compose_node {
     xkb_keysym_t keysym;
@@ -125,5 +108,3 @@ struct xkb_compose_table_entry {
     xkb_keysym_t keysym;
     const char *utf8;
 };
-
-#endif

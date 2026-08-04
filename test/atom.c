@@ -1,24 +1,6 @@
 /*
  * Copyright © 2012 Ran Benita <ran234@gmail.com>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "config.h"
@@ -77,9 +59,6 @@ test_random_strings(void)
     table = atom_table_new();
     assert(table);
 
-    unsigned seed = (unsigned) clock();
-    srand(seed);
-
     N = 1 + rand() % 100000;
     arr = calloc(N, sizeof(*arr));
     assert(arr);
@@ -99,7 +78,6 @@ test_random_strings(void)
                         strlen(string), string);
                 fprintf(stderr, "new length %zu, string %.*s\n",
                         arr[i].len, (int) arr[i].len, arr[i].string);
-                fprintf(stderr, "seed: %u\n", seed);
                 assert(false);
             }
 
@@ -113,7 +91,6 @@ test_random_strings(void)
         if (arr[i].atom == XKB_ATOM_NONE) {
             fprintf(stderr, "failed to intern! len: %zu, string: %.*s\n",
                     arr[i].len, (int) arr[i].len, arr[i].string);
-            fprintf(stderr, "seed: %u\n", seed);
             assert(false);
         }
     }
@@ -139,7 +116,6 @@ test_random_strings(void)
             }
             fprintf(stderr, "END\n");
 
-            fprintf(stderr, "seed: %u\n", seed);
             assert(false);
         }
     }
@@ -150,13 +126,28 @@ test_random_strings(void)
     atom_table_free(table);
 }
 
+/* CLI positional arguments:
+ * 1. Seed for the pseudo-random generator:
+ *    - Leave it unset or set it to “-” to use current time.
+ *    - Use an integer to set it explicitly.
+ */
 int
-main(void)
+main(int argc, char *argv[])
 {
     struct atom_table *table;
     xkb_atom_t atom1, atom2, atom3;
 
     test_init();
+
+    /* Initialize pseudo-random generator with program arg or current time */
+    unsigned int seed;
+    if (argc >= 2 && !streq(argv[1], "-")) {
+        seed = (unsigned int) atoi(argv[1]);
+    } else {
+        seed = (unsigned int) time(NULL);
+    }
+    fprintf(stderr, "Seed for the pseudo-random generator: %u\n", seed);
+    srand(seed);
 
     table = atom_table_new();
     assert(table);

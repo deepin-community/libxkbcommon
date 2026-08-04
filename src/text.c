@@ -1,30 +1,11 @@
-/************************************************************
+/*
  * Copyright (c) 1994 by Silicon Graphics Computer Systems, Inc.
- *
- * Permission to use, copy, modify, and distribute this
- * software and its documentation for any purpose and without
- * fee is hereby granted, provided that the above copyright
- * notice appear in all copies and that both that copyright
- * notice and this permission notice appear in supporting
- * documentation, and that the name of Silicon Graphics not be
- * used in advertising or publicity pertaining to distribution
- * of the software without specific prior written permission.
- * Silicon Graphics makes no representation about the suitability
- * of this software for any purpose. It is provided "as is"
- * without any express or implied warranty.
- *
- * SILICON GRAPHICS DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS
- * SOFTWARE, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
- * AND FITNESS FOR A PARTICULAR PURPOSE. IN NO EVENT SHALL SILICON
- * GRAPHICS BE LIABLE FOR ANY SPECIAL, INDIRECT OR CONSEQUENTIAL
- * DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE,
- * DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE
- * OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION  WITH
- * THE USE OR PERFORMANCE OF THIS SOFTWARE.
- *
- ********************************************************/
+ * SPDX-License-Identifier: HPND
+ */
 
 #include "config.h"
+
+#include <assert.h>
 
 #include "keymap.h"
 #include "keysym.h"
@@ -100,40 +81,8 @@ const LookupEntry groupComponentMaskNames[] = {
 };
 
 const LookupEntry groupMaskNames[] = {
-    { "Group1", 0x01 },
-    { "Group2", 0x02 },
-    { "Group3", 0x04 },
-    { "Group4", 0x08 },
-    { "Group5", 0x10 },
-    { "Group6", 0x20 },
-    { "Group7", 0x40 },
-    { "Group8", 0x80 },
     { "none", 0x00 },
-    { "all", 0xff },
-    { NULL, 0 }
-};
-
-const LookupEntry groupNames[] = {
-    { "Group1", 1 },
-    { "Group2", 2 },
-    { "Group3", 3 },
-    { "Group4", 4 },
-    { "Group5", 5 },
-    { "Group6", 6 },
-    { "Group7", 7 },
-    { "Group8", 8 },
-    { NULL, 0 }
-};
-
-const LookupEntry levelNames[] = {
-    { "Level1", 1 },
-    { "Level2", 2 },
-    { "Level3", 3 },
-    { "Level4", 4 },
-    { "Level5", 5 },
-    { "Level6", 6 },
-    { "Level7", 7 },
-    { "Level8", 8 },
+    { "all", XKB_ALL_GROUPS },
     { NULL, 0 }
 };
 
@@ -157,6 +106,7 @@ const LookupEntry useModMapValueNames[] = {
 
 const LookupEntry actionTypeNames[] = {
     { "NoAction", ACTION_TYPE_NONE },
+    { "VoidAction", ACTION_TYPE_VOID },
     { "SetMods", ACTION_TYPE_MOD_SET },
     { "LatchMods", ACTION_TYPE_MOD_LATCH },
     { "LockMods", ACTION_TYPE_MOD_LOCK },
@@ -180,24 +130,24 @@ const LookupEntry actionTypeNames[] = {
     { "LockControls", ACTION_TYPE_CTRL_LOCK },
     { "Private", ACTION_TYPE_PRIVATE },
     /* deprecated actions below here - unused */
-    { "RedirectKey", ACTION_TYPE_NONE },
-    { "Redirect", ACTION_TYPE_NONE },
-    { "ISOLock", ACTION_TYPE_NONE },
-    { "ActionMessage", ACTION_TYPE_NONE },
-    { "MessageAction", ACTION_TYPE_NONE },
-    { "Message", ACTION_TYPE_NONE },
-    { "DeviceBtn", ACTION_TYPE_NONE },
-    { "DevBtn", ACTION_TYPE_NONE },
-    { "DevButton", ACTION_TYPE_NONE },
-    { "DeviceButton", ACTION_TYPE_NONE },
-    { "LockDeviceBtn", ACTION_TYPE_NONE },
-    { "LockDevBtn", ACTION_TYPE_NONE },
-    { "LockDevButton", ACTION_TYPE_NONE },
-    { "LockDeviceButton", ACTION_TYPE_NONE },
-    { "DeviceValuator", ACTION_TYPE_NONE },
-    { "DevVal", ACTION_TYPE_NONE },
-    { "DeviceVal", ACTION_TYPE_NONE },
-    { "DevValuator", ACTION_TYPE_NONE },
+    { "RedirectKey", ACTION_TYPE_UNSUPPORTED_LEGACY },
+    { "Redirect", ACTION_TYPE_UNSUPPORTED_LEGACY },
+    { "ISOLock", ACTION_TYPE_UNSUPPORTED_LEGACY },
+    { "ActionMessage", ACTION_TYPE_UNSUPPORTED_LEGACY },
+    { "MessageAction", ACTION_TYPE_UNSUPPORTED_LEGACY },
+    { "Message", ACTION_TYPE_UNSUPPORTED_LEGACY },
+    { "DeviceBtn", ACTION_TYPE_UNSUPPORTED_LEGACY },
+    { "DevBtn", ACTION_TYPE_UNSUPPORTED_LEGACY },
+    { "DevButton", ACTION_TYPE_UNSUPPORTED_LEGACY },
+    { "DeviceButton", ACTION_TYPE_UNSUPPORTED_LEGACY },
+    { "LockDeviceBtn", ACTION_TYPE_UNSUPPORTED_LEGACY },
+    { "LockDevBtn", ACTION_TYPE_UNSUPPORTED_LEGACY },
+    { "LockDevButton", ACTION_TYPE_UNSUPPORTED_LEGACY },
+    { "LockDeviceButton", ACTION_TYPE_UNSUPPORTED_LEGACY },
+    { "DeviceValuator", ACTION_TYPE_UNSUPPORTED_LEGACY },
+    { "DevVal", ACTION_TYPE_UNSUPPORTED_LEGACY },
+    { "DeviceVal", ACTION_TYPE_UNSUPPORTED_LEGACY },
+    { "DevValuator", ACTION_TYPE_UNSUPPORTED_LEGACY },
     { NULL, 0 },
 };
 
@@ -258,13 +208,15 @@ SIMatchText(enum xkb_match_operation type)
 }
 
 const char *
-ModMaskText(struct xkb_context *ctx, const struct xkb_mod_set *mods,
-            xkb_mod_mask_t mask)
+ModMaskText(struct xkb_context *ctx, enum mod_type type,
+            const struct xkb_mod_set *mods, xkb_mod_mask_t mask)
 {
     char buf[1024] = {0};
     size_t pos = 0;
-    xkb_mod_index_t i;
     const struct xkb_mod *mod;
+
+    /* We want to avoid boolean blindness, but we expected only 2 values */
+    assert(type == MOD_REAL || type == MOD_BOTH);
 
     if (mask == 0)
         return "none";
@@ -272,26 +224,35 @@ ModMaskText(struct xkb_context *ctx, const struct xkb_mod_set *mods,
     if (mask == MOD_REAL_MASK_ALL)
         return "all";
 
-    xkb_mods_enumerate(i, mod, mods) {
-        int ret;
-
-        if (!(mask & (1u << i)))
-            continue;
-
-        ret = snprintf(buf + pos, sizeof(buf) - pos, "%s%s",
-                       pos == 0 ? "" : "+",
-                       xkb_atom_text(ctx, mod->name));
-        if (ret <= 0 || pos + ret >= sizeof(buf))
-            break;
-        else
-            pos += ret;
+    if ((type == MOD_REAL && (mask & ~MOD_REAL_MASK_ALL)) ||
+        unlikely(mask & ~((UINT64_C(1) << mods->num_mods) - 1))) {
+        /* If we get a mask that cannot be expressed with the known modifiers
+         * of the given type, print it as hexadecimal */
+        const int ret = snprintf(buf, sizeof(buf), "0x%"PRIx32, mask);
+        static_assert(sizeof(mask) == 4 && sizeof(buf) >= sizeof("0xffffffff"),
+                      "Buffer too small");
+        assert(ret >= 0 && (size_t) ret < sizeof(buf));
+        pos = (size_t) ret;
+    } else {
+        /* Print known mods */
+        xkb_mods_mask_foreach(mask, mod, mods) {
+            int ret = snprintf(buf + pos, sizeof(buf) - pos, "%s%s",
+                               pos == 0 ? "" : "+",
+                               xkb_atom_text(ctx, mod->name));
+            if (ret <= 0 || pos + ret >= sizeof(buf))
+                break;
+            else
+                pos += ret;
+        }
     }
+    pos++;
 
-    return strcpy(xkb_context_get_buffer(ctx, pos + 1), buf);
+    return memcpy(xkb_context_get_buffer(ctx, pos), buf, pos);
 }
 
 const char *
-LedStateMaskText(struct xkb_context *ctx, enum xkb_state_component mask)
+LedStateMaskText(struct xkb_context *ctx, const LookupEntry *lookup,
+                 enum xkb_state_component mask)
 {
     char buf[1024];
     size_t pos = 0;
@@ -299,7 +260,7 @@ LedStateMaskText(struct xkb_context *ctx, enum xkb_state_component mask)
     if (mask == 0)
         return "0";
 
-    for (unsigned i = 0; mask; i++) {
+    for (unsigned int i = 0; mask; i++) {
         int ret;
 
         if (!(mask & (1u << i)))
@@ -307,16 +268,18 @@ LedStateMaskText(struct xkb_context *ctx, enum xkb_state_component mask)
 
         mask &= ~(1u << i);
 
+        const char* const maskText = LookupValue(lookup, 1u << i);
+        assert(maskText != NULL);
         ret = snprintf(buf + pos, sizeof(buf) - pos, "%s%s",
-                       pos == 0 ? "" : "+",
-                       LookupValue(modComponentMaskNames, 1u << i));
+                       pos == 0 ? "" : "+", maskText);
         if (ret <= 0 || pos + ret >= sizeof(buf))
             break;
         else
             pos += ret;
     }
+    pos++;
 
-    return strcpy(xkb_context_get_buffer(ctx, pos + 1), buf);
+    return memcpy(xkb_context_get_buffer(ctx, pos), buf, pos);
 }
 
 const char *
@@ -331,7 +294,7 @@ ControlMaskText(struct xkb_context *ctx, enum xkb_action_controls mask)
     if (mask == CONTROL_ALL)
         return "all";
 
-    for (unsigned i = 0; mask; i++) {
+    for (unsigned int i = 0; mask; i++) {
         int ret;
 
         if (!(mask & (1u << i)))
@@ -339,14 +302,16 @@ ControlMaskText(struct xkb_context *ctx, enum xkb_action_controls mask)
 
         mask &= ~(1u << i);
 
+        const char* const maskText = LookupValue(ctrlMaskNames, 1u << i);
+        assert(maskText != NULL);
         ret = snprintf(buf + pos, sizeof(buf) - pos, "%s%s",
-                       pos == 0 ? "" : "+",
-                       LookupValue(ctrlMaskNames, 1u << i));
+                       pos == 0 ? "" : "+", maskText);
         if (ret <= 0 || pos + ret >= sizeof(buf))
             break;
         else
             pos += ret;
     }
+    pos++;
 
-    return strcpy(xkb_context_get_buffer(ctx, pos + 1), buf);
+    return memcpy(xkb_context_get_buffer(ctx, pos), buf, pos);
 }

@@ -1,80 +1,19 @@
-/***********************************************************
+/*
+ * For MIT-open-group:
  * Copyright 1987, 1998  The Open Group
  *
- * Permission to use, copy, modify, distribute, and sell this software and its
- * documentation for any purpose is hereby granted without fee, provided that
- * the above copyright notice appear in all copies and that both that
- * copyright notice and this permission notice appear in supporting
- * documentation.
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL THE
- * OPEN GROUP BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN
- * AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
- * CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
- *
- * Except as contained in this notice, the name of The Open Group shall not be
- * used in advertising or otherwise to promote the sale, use or other dealings
- * in this Software without prior written authorization from The Open Group.
- *
- *
+ * For LicenseRef-digital-equipment-corporation:
  * Copyright 1987 by Digital Equipment Corporation, Maynard, Massachusetts.
  *
- *                      All Rights Reserved
- *
- * Permission to use, copy, modify, and distribute this software and its
- * documentation for any purpose and without fee is hereby granted,
- * provided that the above copyright notice appear in all copies and that
- * both that copyright notice and this permission notice appear in
- * supporting documentation, and that the name of Digital not be
- * used in advertising or publicity pertaining to distribution of the
- * software without specific, written prior permission.
- *
- * DIGITAL DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS SOFTWARE, INCLUDING
- * ALL IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS, IN NO EVENT SHALL
- * DIGITAL BE LIABLE FOR ANY SPECIAL, INDIRECT OR CONSEQUENTIAL DAMAGES OR
- * ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE, DATA OR PROFITS,
- * WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE OR OTHER TORTIOUS ACTION,
- * ARISING OUT OF OR IN CONNECTION WITH THE USE OR PERFORMANCE OF THIS
- * SOFTWARE.
- *
- ******************************************************************/
-
-/************************************************************
+ * For HPND:
  * Copyright 1994 by Silicon Graphics Computer Systems, Inc.
  *
- * Permission to use, copy, modify, and distribute this
- * software and its documentation for any purpose and without
- * fee is hereby granted, provided that the above copyright
- * notice appear in all copies and that both that copyright
- * notice and this permission notice appear in supporting
- * documentation, and that the name of Silicon Graphics not be
- * used in advertising or publicity pertaining to distribution
- * of the software without specific prior written permission.
- * Silicon Graphics makes no representation about the suitability
- * of this software for any purpose. It is provided "as is"
- * without any express or implied warranty.
- *
- * SILICON GRAPHICS DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS
- * SOFTWARE, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
- * AND FITNESS FOR A PARTICULAR PURPOSE. IN NO EVENT SHALL SILICON
- * GRAPHICS BE LIABLE FOR ANY SPECIAL, INDIRECT OR CONSEQUENTIAL
- * DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE,
- * DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE
- * OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION  WITH
- * THE USE OR PERFORMANCE OF THIS SOFTWARE.
- *
- ********************************************************/
+ * SPDX-License-Identifier: MIT-open-group AND LicenseRef-digital-equipment-corporation AND HPND
+ */
 
 #include "config.h"
 
 #include <assert.h>
-#include <inttypes.h>
-#include <stdbool.h>
 #include <string.h>
 
 #include "atom.h"
@@ -85,7 +24,7 @@
 static inline uint32_t
 hash_buf(const char *string, size_t len)
 {
-    uint32_t hash = 2166136261u;
+    uint32_t hash = UINT32_C(2166136261);
     for (size_t i = 0; i < (len + 1) / 2; i++) {
         hash ^= (uint8_t) string[i];
         hash *= 0x01000193;
@@ -135,6 +74,12 @@ atom_table_free(struct atom_table *table)
     free(table);
 }
 
+darray_size_t
+atom_table_size(struct atom_table *table)
+{
+    return darray_size(table->strings);
+}
+
 const char *
 atom_text(struct atom_table *table, xkb_atom_t atom)
 {
@@ -145,11 +90,12 @@ atom_text(struct atom_table *table, xkb_atom_t atom)
 xkb_atom_t
 atom_intern(struct atom_table *table, const char *string, size_t len, bool add)
 {
-    if (darray_size(table->strings) > 0.80 * table->index_size) {
+    /* len(string) > 0.8 * index_size */
+    if (darray_size(table->strings) > (table->index_size / 5) * 4) {
         table->index_size *= 2;
         table->index = realloc(table->index, table->index_size * sizeof(*table->index));
         memset(table->index, 0, table->index_size * sizeof(*table->index));
-        for (size_t j = 1; j < darray_size(table->strings); j++) {
+        for (darray_size_t j = 1; j < darray_size(table->strings); j++) {
             const char *s = darray_item(table->strings, j);
             uint32_t hash = hash_buf(s, strlen(s));
             for (size_t i = 0; i < table->index_size; i++) {
@@ -190,4 +136,5 @@ atom_intern(struct atom_table *table, const char *string, size_t len, bool add)
     }
 
     assert(!"couldn't find an empty slot during probing");
+    return XKB_ATOM_NONE;
 }

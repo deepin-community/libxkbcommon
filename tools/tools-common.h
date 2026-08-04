@@ -1,24 +1,6 @@
 /*
  * Copyright © 2012 Intel Corporation
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  *
  * Author: Daniel Stone <daniel@fooishbar.org>
  */
@@ -28,6 +10,7 @@
 #include "config.h"
 
 #include <assert.h>
+#include <stdbool.h>
 
 /* Don't use compat names in internal code. */
 #define _XKBCOMMON_COMPAT_H
@@ -36,40 +19,48 @@
 
 #define ARRAY_SIZE(arr) ((sizeof(arr) / sizeof(*(arr))))
 
+enum {
+    DEFAULT_KEYMAP_SERIALIZE_FLAGS = XKB_KEYMAP_SERIALIZE_PRETTY |
+                                     XKB_KEYMAP_SERIALIZE_KEEP_UNUSED
+};
+
 /* Fields that are printed in the interactive tools. */
-enum print_state_fields {
-#ifdef ENABLE_PRIVATE_APIS
-    PRINT_MODMAPS = (1u << 1),
-#endif
-    PRINT_LAYOUT = (1u << 2),
-    PRINT_UNICODE = (1u << 3),
+enum print_state_options {
+    PRINT_LAYOUT = (1u << 0),
+    PRINT_UNICODE = (1u << 1),
     PRINT_ALL_FIELDS = ((PRINT_UNICODE << 1) - 1),
     /*
      * Fields that can be hidden with the option --short.
      * NOTE: If this value is modified, remember to update the documentation of
      *       the --short option in the corresponding tools.
      */
-    PRINT_VERBOSE_FIELDS = (PRINT_LAYOUT | PRINT_UNICODE)
+    PRINT_VERBOSE_ONE_LINE_FIELDS = (PRINT_LAYOUT | PRINT_UNICODE),
+    PRINT_VERBOSE = (1u << 2),
+    PRINT_UNILINE = (1u << 3),
+    DEFAULT_PRINT_OPTIONS = PRINT_ALL_FIELDS | PRINT_VERBOSE | PRINT_UNILINE
 };
-typedef uint32_t print_state_fields_mask_t;
 
-#ifdef ENABLE_PRIVATE_APIS
 void
-print_keymap_modmaps(struct xkb_keymap *keymap);
+print_modifiers_encodings(struct xkb_keymap *keymap);
 void
 print_keys_modmaps(struct xkb_keymap *keymap);
-#endif
+
+void
+tools_enable_verbose_logging(struct xkb_context *ctx);
 
 void
 tools_print_keycode_state(const char *prefix,
                           struct xkb_state *state,
                           struct xkb_compose_state *compose_state,
                           xkb_keycode_t keycode,
+                          enum xkb_key_direction direction,
                           enum xkb_consumed_mode consumed_mode,
-                          print_state_fields_mask_t fields);
+                          enum print_state_options options);
 
 void
-tools_print_state_changes(enum xkb_state_component changed);
+tools_print_state_changes(const char *prefix, struct xkb_state *state,
+                          enum xkb_state_component changed,
+                          enum print_state_options options);
 
 void
 tools_disable_stdin_echo(void);
@@ -77,8 +68,17 @@ tools_disable_stdin_echo(void);
 void
 tools_enable_stdin_echo(void);
 
+const char *
+select_backend(const char *wayland, const char *x11, const char *fallback);
+
 int
-tools_exec_command(const char *prefix, int argc, char **argv);
+tools_exec_command(const char *prefix, int argc, const char **argv);
+
+bool
+is_pipe_or_regular_file(int fd);
+
+FILE*
+tools_read_stdin(void);
 
 #ifdef _WIN32
 #define setenv(varname, value, overwrite) _putenv_s((varname), (value))

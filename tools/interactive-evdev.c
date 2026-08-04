@@ -1,24 +1,6 @@
 /*
  * Copyright © 2012 Ran Benita <ran234@gmail.com>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "config.h"
@@ -43,6 +25,8 @@
 
 #include "xkbcommon/xkbcommon.h"
 
+#include "src/utils.h"
+#include "src/keymap-formats.h"
 #include "tools-common.h"
 
 struct keyboard {
@@ -60,12 +44,7 @@ static bool report_state_changes;
 static bool with_compose;
 static enum xkb_consumed_mode consumed_mode = XKB_CONSUMED_MODE_XKB;
 
-#ifdef ENABLE_PRIVATE_APIS
-#define DEFAULT_PRINT_FIELDS (PRINT_ALL_FIELDS & ~PRINT_MODMAPS)
-#else
-#define DEFAULT_PRINT_FIELDS PRINT_ALL_FIELDS
-#endif
-print_state_fields_mask_t print_fields = DEFAULT_PRINT_FIELDS;
+enum print_state_options print_options = DEFAULT_PRINT_OPTIONS;
 
 #define DEFAULT_INCLUDE_PATH_PLACEHOLDER "__defaults__"
 #define NLONGS(n) (((n) + LONG_BIT - 1) / LONG_BIT)
@@ -73,7 +52,7 @@ print_state_fields_mask_t print_fields = DEFAULT_PRINT_FIELDS;
 static bool
 evdev_bit_is_set(const unsigned long *array, int bit)
 {
-    return array[bit / LONG_BIT] & (1LL << (bit % LONG_BIT));
+    return array[bit / LONG_BIT] & (1ULL << (bit % LONG_BIT));
 }
 
 /* Some heuristics to see if the device is a keyboard. */
@@ -279,12 +258,11 @@ process_event(struct keyboard *kbd, uint16_t type, uint16_t code, int32_t value)
         xkb_compose_state_feed(kbd->compose_state, keysym);
     }
 
-    if (value != KEY_STATE_RELEASE) {
-        tools_print_keycode_state(
-            NULL, kbd->state, kbd->compose_state, keycode,
-            consumed_mode, print_fields
-        );
-    }
+    tools_print_keycode_state(
+        NULL, kbd->state, kbd->compose_state, keycode,
+        (value == KEY_STATE_RELEASE) ? XKB_KEY_UP : XKB_KEY_DOWN,
+        consumed_mode, print_options
+    );
 
     if (with_compose) {
         status = xkb_compose_state_get_status(kbd->compose_state);
@@ -292,13 +270,13 @@ process_event(struct keyboard *kbd, uint16_t type, uint16_t code, int32_t value)
             xkb_compose_state_reset(kbd->compose_state);
     }
 
-    if (value == KEY_STATE_RELEASE)
-        changed = xkb_state_update_key(kbd->state, keycode, XKB_KEY_UP);
-    else
-        changed = xkb_state_update_key(kbd->state, keycode, XKB_KEY_DOWN);
+    changed = xkb_state_update_key(kbd->state, keycode,
+                                   (value == KEY_STATE_RELEASE
+                                        ? XKB_KEY_UP
+                                        : XKB_KEY_DOWN));
 
     if (report_state_changes)
-        tools_print_state_changes(changed);
+        tools_print_state_changes(NULL, kbd->state, changed, print_options);
 }
 
 static int
@@ -377,18 +355,19 @@ sigintr_handler(int signum)
 static void
 usage(FILE *fp, char *progname)
 {
-        fprintf(fp, "Usage: %s [--include=<path>] [--include-defaults] "
+        fprintf(fp, "Usage: %s [--include=<path>] [--include-defaults] [--format=<format>]"
                 "[--rules=<rules>] [--model=<model>] [--layout=<layout>] "
-                "[--variant=<variant>] [--options=<options>]\n",
+                "[--variant=<variant>] [--options=<options>] "
+                "[--enable-environment-names]\n",
                 progname);
         fprintf(fp, "   or: %s --keymap <path to keymap file>\n",
                 progname);
         fprintf(fp, "For both:\n"
+                        "          --format <FORMAT> (use keymap format FORMAT)\n"
                         "          --verbose (enable verbose debugging output)\n"
-#ifdef ENABLE_PRIVATE_APIS
-                        "          --print-modmaps (print real & virtual key modmaps)\n"
-#endif
-                        "          --short (do not print layout nor Unicode keysym translation)\n"
+                        "          -1, --uniline (enable uniline event output)\n"
+                        "          --multiline (enable uniline event output)\n"
+                        "          --short (shorter event output)\n"
                         "          --report-state-changes (report changes to the state)\n"
                         "          --enable-compose (enable Compose)\n"
                         "          --consumed-mode={xkb|gtk} (select the consumed modifiers mode, default: xkb)\n"
@@ -408,6 +387,8 @@ main(int argc, char *argv[])
     struct xkb_compose_table *compose_table = NULL;
     const char *includes[64];
     size_t num_includes = 0;
+    bool use_env_names = false;
+    enum xkb_keymap_format keymap_format = DEFAULT_INPUT_KEYMAP_FORMAT;
     const char *rules = NULL;
     const char *model = NULL;
     const char *layout = NULL;
@@ -418,8 +399,12 @@ main(int argc, char *argv[])
     struct sigaction act;
     enum options {
         OPT_VERBOSE,
+        OPT_UNILINE,
+        OPT_MULTILINE,
         OPT_INCLUDE,
         OPT_INCLUDE_DEFAULTS,
+        OPT_ENABLE_ENV_NAMES,
+        OPT_KEYMAP_FORMAT,
         OPT_RULES,
         OPT_MODEL,
         OPT_LAYOUT,
@@ -431,15 +416,16 @@ main(int argc, char *argv[])
         OPT_COMPOSE,
         OPT_SHORT,
         OPT_REPORT_STATE,
-#ifdef ENABLE_PRIVATE_APIS
-        OPT_PRINT_MODMAPS,
-#endif
     };
     static struct option opts[] = {
         {"help",                 no_argument,            0, 'h'},
         {"verbose",              no_argument,            0, OPT_VERBOSE},
+        {"uniline",              no_argument,            0, OPT_UNILINE},
+        {"multiline",            no_argument,            0, OPT_MULTILINE},
         {"include",              required_argument,      0, OPT_INCLUDE},
         {"include-defaults",     no_argument,            0, OPT_INCLUDE_DEFAULTS},
+        {"enable-environment-names", no_argument,        0, OPT_ENABLE_ENV_NAMES},
+        {"format",               required_argument,      0, OPT_KEYMAP_FORMAT},
         {"rules",                required_argument,      0, OPT_RULES},
         {"model",                required_argument,      0, OPT_MODEL},
         {"layout",               required_argument,      0, OPT_LAYOUT},
@@ -451,19 +437,15 @@ main(int argc, char *argv[])
         {"short",                no_argument,            0, OPT_SHORT},
         {"report-state-changes", no_argument,            0, OPT_REPORT_STATE},
         {"without-x11-offset",   no_argument,            0, OPT_WITHOUT_X11_OFFSET},
-#ifdef ENABLE_PRIVATE_APIS
-        {"print-modmaps",        no_argument,            0, OPT_PRINT_MODMAPS},
-#endif
         {0, 0, 0, 0},
     };
 
     setlocale(LC_ALL, "");
 
+    bool has_rmlvo_options = false;
     while (1) {
-        int opt;
         int option_index = 0;
-
-        opt = getopt_long(argc, argv, "h", opts, &option_index);
+        int opt = getopt_long(argc, argv, "*1h", opts, &option_index);
         if (opt == -1)
             break;
 
@@ -471,36 +453,68 @@ main(int argc, char *argv[])
         case OPT_VERBOSE:
             verbose = true;
             break;
+        case '1':
+        case OPT_UNILINE:
+            print_options |= PRINT_UNILINE;
+            break;
+        case '*':
+        case OPT_MULTILINE:
+            print_options &= ~PRINT_UNILINE;
+            break;
         case OPT_INCLUDE:
-            if (num_includes >= ARRAY_SIZE(includes)) {
-                fprintf(stderr, "error: too many includes\n");
-                exit(EXIT_INVALID_USAGE);
-            }
+            if (num_includes >= ARRAY_SIZE(includes))
+                goto too_many_includes;
             includes[num_includes++] = optarg;
             break;
         case OPT_INCLUDE_DEFAULTS:
-            if (num_includes >= ARRAY_SIZE(includes)) {
-                fprintf(stderr, "error: too many includes\n");
-                exit(EXIT_INVALID_USAGE);
-            }
+            if (num_includes >= ARRAY_SIZE(includes))
+                goto too_many_includes;
             includes[num_includes++] = DEFAULT_INCLUDE_PATH_PLACEHOLDER;
             break;
+        case OPT_ENABLE_ENV_NAMES:
+            use_env_names = true;
+            break;
+        case OPT_KEYMAP_FORMAT:
+            keymap_format = xkb_keymap_parse_format(optarg);
+            if (!keymap_format) {
+                fprintf(stderr, "ERROR: invalid --format \"%s\"\n", optarg);
+                usage(stderr, argv[0]);
+                return EXIT_INVALID_USAGE;
+            }
+            break;
         case OPT_RULES:
+            if (keymap_path)
+                goto input_format_error;
             rules = optarg;
+            has_rmlvo_options = true;
             break;
         case OPT_MODEL:
+            if (keymap_path)
+                goto input_format_error;
             model = optarg;
+            has_rmlvo_options = true;
             break;
         case OPT_LAYOUT:
+            if (keymap_path)
+                goto input_format_error;
             layout = optarg;
+            has_rmlvo_options = true;
             break;
         case OPT_VARIANT:
+            if (keymap_path)
+                goto input_format_error;
             variant = optarg;
+            has_rmlvo_options = true;
             break;
         case OPT_OPTION:
+            if (keymap_path)
+                goto input_format_error;
             options = optarg;
+            has_rmlvo_options = true;
             break;
         case OPT_KEYMAP:
+            if (has_rmlvo_options)
+                goto input_format_error;
             keymap_path = optarg;
             break;
         case OPT_WITHOUT_X11_OFFSET:
@@ -513,7 +527,7 @@ main(int argc, char *argv[])
             with_compose = true;
             break;
         case OPT_SHORT:
-            print_fields &= ~PRINT_VERBOSE_FIELDS;
+            print_options &= ~PRINT_VERBOSE;
             break;
         case OPT_CONSUMED_MODE:
             if (strcmp(optarg, "gtk") == 0) {
@@ -521,35 +535,54 @@ main(int argc, char *argv[])
             } else if (strcmp(optarg, "xkb") == 0) {
                 consumed_mode = XKB_CONSUMED_MODE_XKB;
             } else {
-                fprintf(stderr, "error: invalid --consumed-mode \"%s\"\n", optarg);
+                fprintf(stderr, "ERROR: invalid --consumed-mode \"%s\"\n", optarg);
                 usage(stderr, argv[0]);
                 return EXIT_INVALID_USAGE;
             }
             break;
 #ifdef ENABLE_PRIVATE_APIS
         case OPT_PRINT_MODMAPS:
-            print_fields |= PRINT_MODMAPS;
+            print_modmaps = true;
             break;
 #endif
         case 'h':
             usage(stdout, argv[0]);
             return EXIT_SUCCESS;
-        case '?':
+        default:
             usage(stderr, argv[0]);
             return EXIT_INVALID_USAGE;
         }
     }
 
-    ctx = xkb_context_new(XKB_CONTEXT_NO_DEFAULT_INCLUDES);
+    if (optind < argc && !isempty(argv[optind])) {
+        /* Some positional arguments left: use as a keymap input */
+        if (keymap_path || has_rmlvo_options)
+            goto too_much_arguments;
+        keymap_path = argv[optind++];
+        if (optind < argc) {
+too_much_arguments:
+            fprintf(stderr, "ERROR: Too much positional arguments\n");
+            usage(stderr, argv[0]);
+            exit(EXIT_INVALID_USAGE);
+        }
+    }
+
+    if (!(print_options & PRINT_VERBOSE) && (print_options & PRINT_UNILINE)) {
+        print_options &= ~PRINT_VERBOSE_ONE_LINE_FIELDS;
+    }
+
+    enum xkb_context_flags ctx_flags = XKB_CONTEXT_NO_DEFAULT_INCLUDES;
+    if (!use_env_names)
+        ctx_flags |= XKB_CONTEXT_NO_ENVIRONMENT_NAMES;
+
+    ctx = xkb_context_new(ctx_flags);
     if (!ctx) {
-        fprintf(stderr, "Couldn't create xkb context\n");
+        fprintf(stderr, "ERROR: Couldn't create xkb context\n");
         goto out;
     }
 
-    if (verbose) {
-        xkb_context_set_log_level(ctx, XKB_LOG_LEVEL_DEBUG);
-        xkb_context_set_log_verbosity(ctx, 10);
-    }
+    if (verbose)
+        tools_enable_verbose_logging(ctx);
 
     if (num_includes == 0)
         includes[num_includes++] = DEFAULT_INCLUDE_PATH_PLACEHOLDER;
@@ -565,39 +598,41 @@ main(int argc, char *argv[])
     if (keymap_path) {
         FILE *file = fopen(keymap_path, "rb");
         if (!file) {
-            fprintf(stderr, "Couldn't open '%s': %s\n",
+            fprintf(stderr, "ERROR: Couldn't open '%s': %s\n",
                     keymap_path, strerror(errno));
             goto out;
         }
-        keymap = xkb_keymap_new_from_file(ctx, file,
-                                          XKB_KEYMAP_FORMAT_TEXT_V1,
+        keymap = xkb_keymap_new_from_file(ctx, file, keymap_format,
                                           XKB_KEYMAP_COMPILE_NO_FLAGS);
         fclose(file);
     }
     else {
         struct xkb_rule_names rmlvo = {
-            .rules = (rules == NULL || rules[0] == '\0') ? NULL : rules,
-            .model = (model == NULL || model[0] == '\0') ? NULL : model,
-            .layout = (layout == NULL || layout[0] == '\0') ? NULL : layout,
-            .variant = (variant == NULL || variant[0] == '\0') ? NULL : variant,
-            .options = (options == NULL || options[0] == '\0') ? NULL : options
+            .rules = (isempty(rules)) ? NULL : rules,
+            .model = (isempty(model)) ? NULL : model,
+            .layout = (isempty(layout)) ? NULL : layout,
+            .variant = (isempty(variant)) ? NULL : variant,
+            .options = (isempty(options)) ? NULL : options
         };
 
         if (!rules && !model && !layout && !variant && !options)
-            keymap = xkb_keymap_new_from_names(ctx, NULL, 0);
+            keymap = xkb_keymap_new_from_names2(ctx, NULL, keymap_format,
+                                                XKB_KEYMAP_COMPILE_NO_FLAGS);
         else
-            keymap = xkb_keymap_new_from_names(ctx, &rmlvo, 0);
+            keymap = xkb_keymap_new_from_names2(ctx, &rmlvo, keymap_format,
+                                                XKB_KEYMAP_COMPILE_NO_FLAGS);
 
         if (!keymap) {
             fprintf(stderr,
-                    "Failed to compile RMLVO: '%s', '%s', '%s', '%s', '%s'\n",
+                    "ERROR: Failed to compile RMLVO: "
+                    "'%s', '%s', '%s', '%s', '%s'\n",
                     rules, model, layout, variant, options);
             goto out;
         }
     }
 
     if (!keymap) {
-        fprintf(stderr, "Couldn't create xkb keymap\n");
+        fprintf(stderr, "ERROR: Couldn't create xkb keymap\n");
         goto out;
     }
 
@@ -607,7 +642,7 @@ main(int argc, char *argv[])
             xkb_compose_table_new_from_locale(ctx, locale,
                                               XKB_COMPOSE_COMPILE_NO_FLAGS);
         if (!compose_table) {
-            fprintf(stderr, "Couldn't create compose from locale\n");
+            fprintf(stderr, "ERROR: Couldn't create compose from locale\n");
             goto out;
         }
     }
@@ -618,10 +653,10 @@ main(int argc, char *argv[])
     }
 
 #ifdef ENABLE_PRIVATE_APIS
-    if (print_fields & PRINT_MODMAPS) {
+    if (print_modmaps) {
         print_keys_modmaps(keymap);
         putchar('\n');
-        print_keymap_modmaps(keymap);
+        print_modifiers_encodings(keymap);
         putchar('\n');
     }
 #endif
@@ -643,4 +678,14 @@ out:
     xkb_context_unref(ctx);
 
     return ret;
+
+too_many_includes:
+    fprintf(stderr, "ERROR: too many includes (max: %zu)\n",
+            ARRAY_SIZE(includes));
+    exit(EXIT_INVALID_USAGE);
+
+input_format_error:
+    fprintf(stderr, "ERROR: Cannot use RMLVO options with keymap input\n");
+    usage(stderr, argv[0]);
+    exit(EXIT_INVALID_USAGE);
 }

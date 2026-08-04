@@ -1,31 +1,15 @@
 /*
  * Copyright © 2020 Red Hat, Inc.
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "config.h"
 
 #include <assert.h>
-#include <stdio.h>
 #include <getopt.h>
+#include <locale.h>
+#include <stdio.h>
+#include <stdlib.h>
 
 #include "xkbcommon/xkbregistry.h"
 
@@ -68,6 +52,8 @@ main(int argc, char **argv)
         {0, 0, 0, 0},
     };
 
+    setlocale(LC_ALL, "");
+
     while (1) {
         int c;
         int option_index = 0;
@@ -80,9 +66,6 @@ main(int argc, char **argv)
             case 'h':
                 usage(argv[0], stdout);
                 return 0;
-            case '?':
-                usage(argv[0], stderr);
-                return EXIT_INVALID_USAGE;
             case 'd':
                 load_defaults = false;
                 break;
@@ -95,6 +78,9 @@ main(int argc, char **argv)
             case 'v':
                 verbosity++;
                 break;
+            default:
+                usage(argv[0], stderr);
+                return EXIT_INVALID_USAGE;
         }
     }
 
@@ -102,7 +88,11 @@ main(int argc, char **argv)
         flags |= RXKB_CONTEXT_NO_DEFAULT_INCLUDES;
 
     ctx = rxkb_context_new(flags);
-    assert(ctx);
+    if (!ctx) {
+        fprintf(stderr, "Failed to create a registry context\n");
+        rc = EXIT_FAILURE;
+        goto err;
+    }
 
     switch (verbosity) {
         case 0:
@@ -216,21 +206,22 @@ main(int argc, char **argv)
 
             printf("  - name: '%s'\n"
                    "    brief: '%s'\n"
-                   "    description: '%s'\n",
+                   "    description: '%s'\n"
+                   "    layout-specific: %s\n",
                    rxkb_option_get_name(o),
                    brief ? brief : "",
-                   rxkb_option_get_description(o));
+                   rxkb_option_get_description(o),
+                   rxkb_option_is_layout_specific(o) ? "true" : "false");
             o = rxkb_option_next(o);
         }
 
         g = rxkb_option_group_next(g);
     }
 
-    rc = 0;
+    rc = EXIT_SUCCESS;
 
 err:
-    if (ctx)
-        rxkb_context_unref(ctx);
+    rxkb_context_unref(ctx);
 
     return rc;
 }

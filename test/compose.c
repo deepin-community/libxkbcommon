@@ -1,37 +1,28 @@
 /*
  * Copyright © 2014 Ran Benita <ran234@gmail.com>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "config.h"
+
+#include <stdlib.h>
 #include <time.h>
 #include <errno.h>
+#include <locale.h>
+#include <stdio.h>
 
 #include "xkbcommon/xkbcommon-compose.h"
+#include "xkbcommon/xkbcommon-keysyms.h"
 
 #include "test.h"
 #include "src/utf8.h"
 #include "src/keysym.h"
+#include "src/compose/constants.h"
 #include "src/compose/parser.h"
+#include "src/compose/escape.h"
 #include "src/compose/dump.h"
+#include "test/compose-iter.h"
+#include "test/utils-text.h"
 
 static const char *
 compose_status_string(enum xkb_compose_status status)
@@ -137,7 +128,7 @@ test_compose_seq_va(struct xkb_compose_table *table, va_list ap)
             xkb_keysym_get_name(expected_keysym, buffer, sizeof(buffer));
             fprintf(stderr, "expected keysym: %s\n", buffer);
             xkb_keysym_get_name(keysym, buffer, sizeof(buffer));
-            fprintf(stderr, "got keysym (%#x): %s\n", keysym, buffer);
+            fprintf(stderr, "got keysym (%#06"PRIx32"): %s\n", keysym, buffer);
             goto fail;
         }
     }
@@ -388,8 +379,8 @@ test_conflicting(struct xkb_context *ctx)
         "<A> <B> <C>  :  \"foo\"  A \n"
         "<A> <B>      :  \"bar\"  B \n",
         XKB_KEY_A,              XKB_COMPOSE_FEED_ACCEPTED,  XKB_COMPOSE_COMPOSING,  "",     XKB_KEY_NoSymbol,
-        XKB_KEY_B,              XKB_COMPOSE_FEED_ACCEPTED,  XKB_COMPOSE_COMPOSING,  "",     XKB_KEY_NoSymbol,
-        XKB_KEY_C,              XKB_COMPOSE_FEED_ACCEPTED,  XKB_COMPOSE_COMPOSED,   "foo",  XKB_KEY_A,
+        XKB_KEY_B,              XKB_COMPOSE_FEED_ACCEPTED,  XKB_COMPOSE_COMPOSED,   "bar",  XKB_KEY_B,
+        XKB_KEY_C,              XKB_COMPOSE_FEED_ACCEPTED,  XKB_COMPOSE_NOTHING,    "",     XKB_KEY_NoSymbol,
         XKB_KEY_NoSymbol));
 
     // old is a prefix of new
@@ -426,12 +417,36 @@ test_conflicting(struct xkb_context *ctx)
         XKB_KEY_B,              XKB_COMPOSE_FEED_ACCEPTED,  XKB_COMPOSE_COMPOSED,   "foo",  XKB_KEY_B,
         XKB_KEY_NoSymbol));
 
-    // new same length as old #3
+    // new same length as old #3: overwritable string: do not allocate
     assert(test_compose_seq_buffer(ctx,
         "<A> <B>      :  \"foo\"  A \n"
-        "<A> <B>      :  \"bar\"  A \n",
+        "<A> <B>      :  \"qu\"   A \n",
         XKB_KEY_A,              XKB_COMPOSE_FEED_ACCEPTED,  XKB_COMPOSE_COMPOSING,  "",     XKB_KEY_NoSymbol,
-        XKB_KEY_B,              XKB_COMPOSE_FEED_ACCEPTED,  XKB_COMPOSE_COMPOSED,   "bar",  XKB_KEY_A,
+        XKB_KEY_B,              XKB_COMPOSE_FEED_ACCEPTED,  XKB_COMPOSE_COMPOSED,   "qu",   XKB_KEY_A,
+        XKB_KEY_NoSymbol));
+
+    // new same length as old #4: no-overwritable string: allocate
+    assert(test_compose_seq_buffer(ctx,
+        "<A> <B>      :  \"foo\"  A \n"
+        "<A> <B>      :  \"quux\" A \n",
+        XKB_KEY_A,              XKB_COMPOSE_FEED_ACCEPTED,  XKB_COMPOSE_COMPOSING,  "",     XKB_KEY_NoSymbol,
+        XKB_KEY_B,              XKB_COMPOSE_FEED_ACCEPTED,  XKB_COMPOSE_COMPOSED,   "quux", XKB_KEY_A,
+        XKB_KEY_NoSymbol));
+
+    // new same length as old #5: ensure string is reset
+    assert(test_compose_seq_buffer(ctx,
+        "<A> <B>      :  \"foo\"  A \n"
+        "<A> <B>      :           B \n",
+        XKB_KEY_A,              XKB_COMPOSE_FEED_ACCEPTED,  XKB_COMPOSE_COMPOSING,  "",     XKB_KEY_NoSymbol,
+        XKB_KEY_B,              XKB_COMPOSE_FEED_ACCEPTED,  XKB_COMPOSE_COMPOSED,   "B",    XKB_KEY_B,
+        XKB_KEY_NoSymbol));
+
+    // new same length as old #6: ensure keysym is reset
+    assert(test_compose_seq_buffer(ctx,
+        "<A> <B>      :  \"foo\"  A \n"
+        "<A> <B>      :  \"bar\"    \n",
+        XKB_KEY_A,              XKB_COMPOSE_FEED_ACCEPTED,  XKB_COMPOSE_COMPOSING,  "",     XKB_KEY_NoSymbol,
+        XKB_KEY_B,              XKB_COMPOSE_FEED_ACCEPTED,  XKB_COMPOSE_COMPOSED,   "bar",  XKB_KEY_NoSymbol,
         XKB_KEY_NoSymbol));
 }
 
@@ -563,6 +578,24 @@ test_from_locale(struct xkb_context *ctx)
                                               XKB_COMPOSE_COMPILE_NO_FLAGS);
     assert(table);
     xkb_compose_table_unref(table);
+
+#ifdef HAVE_NEWLOCALE
+    /* Test custom locale. Require installing it system-wide */
+    /* NOTE: Keep the locale name in sync with the localedef call in our CI */
+    static const char * const custom_locale = "xx_YY.UTF-8";
+    locale_t loc = newlocale(LC_ALL, custom_locale, (locale_t) 0);
+    table = xkb_compose_table_new_from_locale(ctx, custom_locale,
+                                              XKB_COMPOSE_COMPILE_NO_FLAGS);
+    if (loc == (locale_t) 0) {
+        /* Locale is not installed: no fallback */
+        assert(!table);
+    } else {
+        /* Locale is installed */
+        freelocale(loc);
+        assert(table);
+        xkb_compose_table_unref(table);
+    }
+#endif
 
     /* Bogus - not found. */
     table = xkb_compose_table_new_from_locale(ctx, "blabla",
@@ -696,7 +729,7 @@ test_eq_entry_va(struct xkb_compose_table_entry *entry, xkb_keysym_t keysym_ref,
     const xkb_keysym_t *sequence = xkb_compose_table_entry_sequence(entry, &nsyms);
 
     xkb_keysym_t keysym;
-    for (unsigned k = 0; ; k++) {
+    for (unsigned int k = 0; ; k++) {
         keysym = va_arg(ap, xkb_keysym_t);
         if (keysym == XKB_KEY_NoSymbol) {
             return (k == nsyms - 1);
@@ -717,8 +750,45 @@ test_eq_entry(struct xkb_compose_table_entry *entry, xkb_keysym_t keysym, const 
     return ok;
 }
 
+static bool
+test_eq_entries(struct xkb_compose_table_entry *entry1, struct xkb_compose_table_entry *entry2)
+{
+    if (!entry1 || !entry2)
+        goto error;
+    bool ok = true;
+    if (entry1->keysym != entry2->keysym ||
+        !streq_null(entry1->utf8, entry2->utf8) ||
+        entry1->sequence_length != entry2->sequence_length)
+        ok = false;
+    for (size_t k = 0; k < entry1->sequence_length; k++) {
+        if (entry1->sequence[k] != entry2->sequence[k])
+            ok = false;
+    }
+    if (ok)
+        return true;
+error:
+#define print_entry(msg, entry)                   \
+    fprintf(stderr, msg);                         \
+    if (entry)                                    \
+        print_compose_table_entry(stderr, entry); \
+    else                                          \
+        fprintf(stderr, "\n");
+    print_entry("Expected: ", entry1);
+    print_entry("Got:      ", entry2);
+#undef print_entry
+    return false;
+}
+
 static void
-test_traverse(struct xkb_context *ctx)
+compose_traverse_fn(struct xkb_compose_table_entry *entry_ref, void *data)
+{
+    struct xkb_compose_table_iterator *iter = (struct xkb_compose_table_iterator *)data;
+    struct xkb_compose_table_entry *entry = xkb_compose_table_iterator_next(iter);
+    assert(test_eq_entries(entry_ref, entry));
+}
+
+static void
+test_traverse(struct xkb_context *ctx, size_t quickcheck_loops)
 {
     struct xkb_compose_table *table;
     struct xkb_compose_table_iterator *iter;
@@ -796,6 +866,34 @@ test_traverse(struct xkb_context *ctx)
 
     xkb_compose_table_iterator_free(iter);
     xkb_compose_table_unref(table);
+
+    /* QuickCheck: shuffle compose file lines and compare against
+     * reference implementation */
+    char *input = test_read_file("locale/en_US.UTF-8/Compose");
+    assert(input);
+    struct text_line lines[6000];
+    size_t input_length = strlen(input);
+    size_t lines_count = split_lines(input, input_length, lines, ARRAY_SIZE(lines));
+    /* Note: we may add additional new line char */
+    char *shuffled = calloc(input_length + 1, sizeof(char));
+    assert(shuffled);
+    for (size_t k = 0; k < quickcheck_loops; k++) {
+        size_t shuffled_length = shuffle_lines(lines, lines_count, shuffled);
+        table = xkb_compose_table_new_from_buffer(ctx, shuffled, shuffled_length, "",
+                                                  XKB_COMPOSE_FORMAT_TEXT_V1,
+                                                  XKB_COMPOSE_COMPILE_NO_FLAGS);
+        assert(table);
+
+        iter = xkb_compose_table_iterator_new(table);
+        assert(iter);
+        xkb_compose_table_for_each(table, compose_traverse_fn, iter);
+        assert(xkb_compose_table_iterator_next(iter) == NULL);
+        xkb_compose_table_iterator_free(iter);
+
+        xkb_compose_table_unref(table);
+    }
+    free(shuffled);
+    free(input);
 }
 
 static void
@@ -896,6 +994,7 @@ test_encode_escape_sequences(struct xkb_context *ctx)
     char buf[1 + MAX_CODE_POINTS_COUNT * 4];
     for (int ascii = 1; ascii >= 0; ascii--) {
         for (size_t s = 0; s < SAMPLE_SIZE; s++) {
+            memset(buf, 0xab, sizeof(buf));
             /* Create the string */
             size_t length = 1 + (rand() % MAX_CODE_POINTS_COUNT);
             size_t c = 0;
@@ -937,6 +1036,72 @@ test_encode_escape_sequences(struct xkb_context *ctx)
 #   undef MAX_CODE_POINTS_COUNT
 }
 
+/* Roundtrip check: check that a table parsed from a file and the table parsed
+ * from the dump of the previous table are identical */
+static void
+test_roundtrip(struct xkb_context *ctx)
+{
+/* TODO: add support for systems without open_memstream */
+#if HAVE_OPEN_MEMSTREAM
+    bool ok = false;
+
+    /* Parse reference file */
+    char *input = test_read_file("locale/en_US.UTF-8/Compose");
+    assert(input);
+    size_t input_length = strlen(input);
+    struct xkb_compose_table *ref_table = xkb_compose_table_new_from_buffer(
+        ctx, input, input_length, "",
+        XKB_COMPOSE_FORMAT_TEXT_V1,
+        XKB_COMPOSE_COMPILE_NO_FLAGS
+    );
+    free(input);
+    assert(ref_table);
+
+    /* Dump reference Compose table */
+    char *output;
+    size_t output_length = 0;
+    FILE *output_file = open_memstream(&output, &output_length);
+    assert(output_file);
+
+    ok = xkb_compose_table_dump(output_file, ref_table);
+    fclose(output_file);
+    assert(input);
+
+    if (!ok) {
+        free(output);
+        xkb_compose_table_unref(ref_table);
+        exit(TEST_SETUP_FAILURE);
+    }
+
+    /* Parse dumped table */
+    struct xkb_compose_table *table = xkb_compose_table_new_from_buffer(
+        ctx, output, output_length, "",
+        XKB_COMPOSE_FORMAT_TEXT_V1,
+        XKB_COMPOSE_COMPILE_NO_FLAGS
+    );
+    free(output);
+    assert(table);
+
+    /* Check roundtrip by comparing table entries */
+    struct xkb_compose_table_iterator *iter = xkb_compose_table_iterator_new(table);
+    xkb_compose_table_for_each(ref_table, compose_traverse_fn, iter);
+    assert(xkb_compose_table_iterator_next(iter) == NULL);
+
+    xkb_compose_table_iterator_free(iter);
+    xkb_compose_table_unref(table);
+    xkb_compose_table_unref(ref_table);
+#endif
+}
+
+/* CLI positional arguments:
+ * 1. Seed for the pseudo-random generator:
+ *    - Leave it unset or set it to “-” to use current time.
+ *    - Use an integer to set it explicitly.
+ * 2. Number of quickcheck loops:
+ *    - Leave it unset to use the default. It depends if the `RUNNING_VALGRIND`
+ *      environment variable is set.
+ *    - Use an integer to set it explicitly.
+ */
 int
 main(int argc, char *argv[])
 {
@@ -948,14 +1113,24 @@ main(int argc, char *argv[])
     assert(ctx);
 
     /* Initialize pseudo-random generator with program arg or current time */
-    int seed;
-    if (argc == 2) {
-        seed = atoi(argv[1]);
+    unsigned int seed;
+    if (argc >= 2 && !streq(argv[1], "-")) {
+        seed = (unsigned int) atoi(argv[1]);
     } else {
-        seed = time(NULL);
+        seed = (unsigned int) time(NULL);
     }
-    fprintf(stderr, "Seed for the pseudo-random generator: %d\n", seed);
+    fprintf(stderr, "Seed for the pseudo-random generator: %u\n", seed);
     srand(seed);
+
+    /* Determine number of loops for quickchecks */
+    size_t quickcheck_loops = 50; /* Default */
+    if (argc > 2) {
+        /* From command-line */
+        quickcheck_loops = (size_t)atoi(argv[2]);
+    } else if (getenv("RUNNING_VALGRIND") != NULL) {
+        /* Reduce if running Valgrind */
+        quickcheck_loops = quickcheck_loops / 20;
+    }
 
     /*
      * Ensure no environment variables but “top_srcdir” is set. This ensures
@@ -965,7 +1140,8 @@ main(int argc, char *argv[])
 #ifdef __linux__
     const char *srcdir = getenv("top_srcdir");
     clearenv();
-    setenv("top_srcdir", srcdir, 1);
+    if (srcdir)
+        setenv("top_srcdir", srcdir, 1);
 #else
     unsetenv("XCOMPOSEFILE");
     unsetenv("XDG_CONFIG_HOME");
@@ -983,11 +1159,12 @@ main(int argc, char *argv[])
     test_modifier_syntax(ctx);
     test_include(ctx);
     test_override(ctx);
-    test_traverse(ctx);
+    test_traverse(ctx, quickcheck_loops);
     test_string_length(ctx);
     test_decode_escape_sequences(ctx);
     test_encode_escape_sequences(ctx);
+    test_roundtrip(ctx);
 
     xkb_context_unref(ctx);
-    return 0;
+    return EXIT_SUCCESS;
 }

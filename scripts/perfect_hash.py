@@ -75,16 +75,19 @@ If the procedure fails, G is cyclic, and we go back to step 2, replacing G
 with a new graph, and thereby discarding the vertex values from the failed
 attempt.
 """
+
 from __future__ import absolute_import, division, print_function
 
-import sys
 import random
+import shutil
 import string
 import subprocess
-import shutil
+import sys
 import tempfile
 from collections import defaultdict
+from optparse import Values
 from os.path import join
+from typing import Any, Sequence, TypeVar
 
 if sys.version_info[0] == 2:
     from cStringIO import StringIO
@@ -108,14 +111,14 @@ class Graph(object):
     the desired edge value (mod N).
     """
 
-    def __init__(self, N):
+    def __init__(self, N: int):
         self.N = N  # number of vertices
 
         # maps a vertex number to the list of tuples (vertex, edge value)
         # to which it is connected by edges.
-        self.adjacent = defaultdict(list)
+        self.adjacent: dict[int, list[tuple[int, int]]] = defaultdict(list)
 
-    def connect(self, vertex1, vertex2, edge_value):
+    def connect(self, vertex1: int, vertex2: int, edge_value: int) -> None:
         """
         Connect 'vertex1' and 'vertex2' with an edge, with associated
         value 'value'
@@ -124,7 +127,7 @@ class Graph(object):
         self.adjacent[vertex1].append((vertex2, edge_value))
         self.adjacent[vertex2].append((vertex1, edge_value))
 
-    def assign_vertex_values(self):
+    def assign_vertex_values(self) -> bool:
         """
         Try to assign the vertex values, such that, for each edge, you can
         add the values for the two vertices involved and get the desired
@@ -149,7 +152,7 @@ class Graph(object):
             self.vertex_values[root] = 0  # set arbitrarily to zero
 
             # Stack of vertices to visit, a list of tuples (parent, vertex)
-            tovisit = [(None, root)]
+            tovisit: list[tuple[int | None, int]] = [(None, root)]
             while tovisit:
                 parent, vertex = tovisit.pop()
                 visited[vertex] = True
@@ -183,7 +186,7 @@ class Graph(object):
         return True
 
 
-class StrSaltHash(object):
+class StrSaltHash:
     """
     Random hash function generator.
     Simple byte level hashing: each byte is multiplied to another byte from
@@ -193,11 +196,11 @@ class StrSaltHash(object):
 
     chars = string.ascii_letters + string.digits
 
-    def __init__(self, N):
+    def __init__(self, N: int):
         self.N = N
         self.salt = ""
 
-    def __call__(self, key):
+    def __call__(self, key: Sequence[str]) -> int:
         # XXX: xkbcommon modification: make the salt length a power of 2
         #      so that the % operation in the hash is fast.
         while len(self.salt) < max(len(key), 32):  # add more salt as necessary
@@ -215,18 +218,18 @@ def perfect_hash(key):
 """
 
 
-class IntSaltHash(object):
+class IntSaltHash:
     """
     Random hash function generator.
     Simple byte level hashing, each byte is multiplied in sequence to a table
     containing random numbers, summed tp, and finally modulo NG is taken.
     """
 
-    def __init__(self, N):
-        self.N = N
-        self.salt = []
+    def __init__(self, N: int):
+        self.N: int = N
+        self.salt: list[int] = []
 
-    def __call__(self, key):
+    def __call__(self, key: Sequence[str]) -> int:
         while len(self.salt) < len(key):  # add more salt as necessary
             self.salt.append(random.randint(1, self.N - 1))
 
@@ -245,7 +248,10 @@ def perfect_hash(key):
 """
 
 
-def builtin_template(Hash):
+H = TypeVar("H", StrSaltHash, IntSaltHash)
+
+
+def builtin_template(Hash: type[H]) -> str:
     return (
         """\
 # =======================================================================
@@ -271,7 +277,13 @@ class TooManyInterationsError(Exception):
     pass
 
 
-def generate_hash(keys, Hash=StrSaltHash):
+# NOTE: as of mypy 1.13, it is not possible to specify a default value for a generic
+# parameter, so `Hash: type[H] = StrSaltHash` will raise a type error. See:
+# • https://github.com/python/mypy/issues/3737
+# • https://github.com/python/mypy/issues/18017
+def generate_hash(
+    keys: list[str], Hash: type[H] = StrSaltHash
+) -> tuple[H, H, list[int]]:
     """
     Return hash functions f1 and f2, and G for a perfect minimal hash.
     Input is an iterable of 'keys', whos indicies are the desired hash values.
@@ -348,17 +360,17 @@ WARNING: You have %d keys.
 
 
 class Format(object):
-    def __init__(self, width=76, indent=4, delimiter=", "):
+    def __init__(self, width: int = 76, indent: int = 4, delimiter: str = ", "):
         self.width = width
         self.indent = indent
         self.delimiter = delimiter
 
-    def print_format(self):
+    def print_format(self) -> None:
         print("Format options:")
         for name in "width", "indent", "delimiter":
             print("  %s: %r" % (name, getattr(self, name)))
 
-    def __call__(self, data, quote=False):
+    def __call__(self, data: Any, quote: bool = False) -> str:
         if not isinstance(data, (list, tuple)):
             return str(data)
 
@@ -383,7 +395,12 @@ class Format(object):
         return "\n".join(l.rstrip() for l in aux.getvalue().split("\n"))
 
 
-def generate_code(keys, Hash=StrSaltHash, template=None, options=None):
+def generate_code(
+    keys: list[str],
+    Hash: type[H] = StrSaltHash,
+    template: str | None = None,
+    options: Values | None = None,
+) -> str:
     """
     Takes a list of key value pairs and inserts the generated parameter
     lists into the 'template' string.  'Hash' is the random hash function
@@ -423,7 +440,7 @@ def generate_code(keys, Hash=StrSaltHash, template=None, options=None):
     )
 
 
-def read_table(filename, options):
+def read_table(filename: str, options: Values) -> list[str]:
     """
     Reads keys and desired hash value pairs from a file.  If no column
     for the hash value is specified, a sequence of hash values is generated,
@@ -454,7 +471,7 @@ def read_table(filename, options):
         row = [col.strip() for col in line.split(options.splitby)]
 
         try:
-            key = row[options.keycol - 1]
+            key: str = row[options.keycol - 1]
         except IndexError:
             sys.exit(
                 "%s:%d: Error: Cannot read key, not enough columns." % (filename, n + 1)
@@ -470,7 +487,7 @@ def read_table(filename, options):
     return keys
 
 
-def read_template(filename):
+def read_template(filename: str) -> str:
     if verbose:
         print("Reading template from file `%s'" % filename)
     try:
@@ -480,7 +497,7 @@ def read_template(filename):
         sys.exit("Error: Could not open `%s' for reading." % filename)
 
 
-def run_code(code):
+def run_code(code: str) -> None:
     tmpdir = tempfile.mkdtemp()
     path = join(tmpdir, "t.py")
     with open(path, "w") as fo:
@@ -493,7 +510,7 @@ def run_code(code):
         shutil.rmtree(tmpdir)
 
 
-def main():
+def main() -> None:
     from optparse import OptionParser
 
     usage = "usage: %prog [options] KEYS_FILE [TMPL_FILE]"
@@ -537,8 +554,7 @@ is processed and the output code is written to stdout.
         action="store",
         default=76,
         type="int",
-        help="Maximal width of generated list when "
-        "wrapped.  Default width is %default",
+        help="Maximal width of generated list when wrapped.  Default width is %default",
         metavar="INT",
     )
 
@@ -605,7 +621,7 @@ is processed and the output code is written to stdout.
         "-e",
         "--execute",
         action="store_true",
-        help="Execute the generated code within " "the Python interpreter.",
+        help="Execute the generated code within the Python interpreter.",
     )
 
     parser.add_option(
@@ -641,7 +657,7 @@ is processed and the output code is written to stdout.
         parser.error("template filename does not contain 'tmpl'")
 
     if options.hft == 1:
-        Hash = StrSaltHash
+        Hash: type = StrSaltHash
     elif options.hft == 2:
         Hash = IntSaltHash
     else:

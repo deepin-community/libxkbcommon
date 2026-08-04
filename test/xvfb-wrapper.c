@@ -1,41 +1,23 @@
 /*
  * Copyright © 2014 Ran Benita <ran234@gmail.com>
  * Copyright © 2023 Pierre Le Marre <dev@wismill.eu>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "config.h"
 
-#include <stdio.h>
-#include <spawn.h>
 #include <assert.h>
 #include <signal.h>
+#include <spawn.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include <sys/types.h>
 #include <sys/wait.h>
 
 #include "test.h"
 #include "xvfb-wrapper.h"
-#include "xkbcommon/xkbcommon-x11.h"
 
-static bool xvfb_is_ready;
+static volatile bool xvfb_is_ready;
 
 static void
 sigusr1_handler(int signal)
@@ -44,9 +26,9 @@ sigusr1_handler(int signal)
 }
 
 int
-xvfb_wrapper(int (*test_func)(char* display))
+xvfb_wrapper(x11_test_func_t test_func, void *private)
 {
-    int ret = 0;
+    int ret = EXIT_SUCCESS;
     FILE * display_fd;
     char display_fd_string[32];
     sigset_t mask;
@@ -67,17 +49,18 @@ xvfb_wrapper(int (*test_func)(char* display))
         goto err_display_fd;
     }
     snprintf(display_fd_string, sizeof(display_fd_string), "%d", fileno(display_fd));
-    fprintf(stderr, "display_fd_string: %s\n", display_fd_string);
 
-    /* Set SIGUSR1 to SIG_IGN so Xvfb will send us that signal
-     * when it's ready to accept connections */
+    /* Set SIGUSR1 to SIG_IGN so Xvfb will send us that signal when it's ready
+     * to accept connections. In order to avoid race condition, we block the
+     * until we are ready to process it. */
     sigemptyset(&mask);
     sigaddset(&mask, SIGUSR1);
     sigprocmask(SIG_BLOCK, &mask, NULL);
-    sa.sa_handler = SIG_IGN;
-    sa.sa_flags = 0;
+    sa.sa_handler = sigusr1_handler;
+    sa.sa_flags = SA_RESTART;
     sigemptyset(&sa.sa_mask);
-    sigaction(SIGUSR1, &sa, NULL);
+    struct sigaction sa_old;
+    sigaction(SIGUSR1, &sa, &sa_old);
 
     xvfb_is_ready = false;
 
@@ -91,17 +74,20 @@ xvfb_wrapper(int (*test_func)(char* display))
      */
     ret = posix_spawnp(&xvfb_pid, "Xvfb", NULL, NULL, xvfb_argv, envp);
     if (ret != 0) {
-        fprintf(stderr, "posix_spawnp error %d: %s\n", ret, strerror(ret));
+        fprintf(stderr,
+                "[ERROR] Cannot run Xvfb. posix_spawnp error %d: %s\n",
+                ret, strerror(ret));
+        if (ret == ENOENT) {
+            fprintf(stderr,
+                    "[ERROR] Xvfb may be missing. "
+                    "Please install the corresponding package, "
+                    "e.g. \"xvfb\" or \"xorg-x11-server-Xvfb\".\n");
+        }
         ret = TEST_SETUP_FAILURE;
         goto err_xvfd;
     }
 
-    sa.sa_handler = SIG_DFL;
-    sa.sa_flags = 0;
-    sigemptyset(&sa.sa_mask);
-    sigaction(SIGUSR1, &sa, NULL);
-    signal(SIGUSR1, sigusr1_handler);
-    sigprocmask (SIG_UNBLOCK, &mask, NULL);
+    sigprocmask(SIG_UNBLOCK, &mask, NULL);
 
     /* Now wait for the SIGUSR1 signal that Xvfb is ready */
     while (!xvfb_is_ready) {
@@ -110,12 +96,20 @@ xvfb_wrapper(int (*test_func)(char* display))
             break;
     }
 
-    signal(SIGUSR1, SIG_DFL);
+    sigaction(SIGUSR1, &sa_old, NULL);
+
+    /* Check if Xvfb is still alive */
+    pid_t pid = waitpid(xvfb_pid, NULL, WNOHANG);
+    if (pid != 0) {
+        fprintf(stderr, "ERROR: Xvfb not alive\n");
+        ret = TEST_SETUP_FAILURE;
+        goto err_xvfd;
+    }
 
     /* Retrieve the display number: Xvfd writes the display number as a newline-
      * terminated string; copy this number to form a proper display string. */
-    rewind(display_fd);
-    length = fread(&display[1], 1, sizeof(display) - 1, display_fd);
+    fseek(display_fd, 0, SEEK_SET);
+    length = fread(&display[1], 1, sizeof(display) - 2, display_fd);
     if (length <= 0) {
         fprintf(stderr, "fread error: length=%zu\n", length);
         ret = TEST_SETUP_FAILURE;
@@ -125,12 +119,50 @@ xvfb_wrapper(int (*test_func)(char* display))
         display[length] = '\0';
     }
 
-    /* Run the function requiring a running X server */
-    ret = test_func(display);
+    /* Run the function requiring a running X server.
+     * Because it may call abort() via assert(), we fork to be able to
+     * exit gracefully and not hang waiting for Xvfb. */
+    pid_t test_pid = fork();
+    switch (test_pid) {
+        case -1:
+            perror("fork");
+            ret = TEST_SETUP_FAILURE;
+            break;
+        case 0:
+            fprintf(stderr, "Running test using Xvfb wrapper...\n");
+            ret = test_func(display, private);
+            fprintf(stderr,
+                    "Test using Xvfb wrapper finished with code %d.\n", ret);
+            _exit(ret);
+        default:
+            {
+                int test_status = 0;
+                pid_t test_pid2 = waitpid(test_pid, &test_status, 0);
+                ret = (test_pid2 > 0 && WIFEXITED(test_status))
+                    ? WEXITSTATUS(test_status)
+                    : EXIT_FAILURE;
+                fprintf(stderr,
+                        "Test finished with code %d. "
+                        "Shutting down Xvfb (pid: %d)...\n",
+                        ret, xvfb_pid);
+            }
+    }
 
 err_xvfd:
-    if (xvfb_pid > 0)
+    if (xvfb_pid > 0) {
+        fprintf(stderr, "Sending SIGTERM to Xvfb...\n");
         kill(xvfb_pid, SIGTERM);
+        fprintf(stderr, "Waiting for Xvfb to exit (pid: %d)...\n", xvfb_pid);
+        int xvfb_status = 0;
+        if (waitpid(xvfb_pid, &xvfb_status, 0) <= 0) {
+            perror("Xvfb waitpid failed.");
+        } else if (WIFEXITED(xvfb_status)) {
+            fprintf(stderr, "Xvfb shut down (pid: %d) with exit code %d.\n",
+                    xvfb_pid, WEXITSTATUS(xvfb_status));
+        } else {
+            fprintf(stderr, "Xvfb shut down (pid: %d) abnormally.\n", xvfb_pid);
+        }
+    }
     fclose(display_fd);
 err_display_fd:
     return ret;
@@ -143,22 +175,16 @@ err_display_fd:
 DECLARE_TEST_ELF_SECTION_POINTERS(TEST_ELF_SECTION);
 
 int
-x11_tests_run()
+x11_tests_run(void)
 {
-    size_t count = 1; /* For NULL-terminated entry */
-
-    for (const struct test_function *t = &__start_test_func_sec;
-         t < &__stop_test_func_sec;
-         t++)
-        count++;
-
-    int rc;
+    int rc = 0;
     for (const struct test_function *t = &__start_test_func_sec;
          t < &__stop_test_func_sec;
          t++) {
-        fprintf(stderr, "Running test: %s from %s\n", t->name, t->file);
-        rc = xvfb_wrapper(t->func);
-        if (rc != 0) {
+        fprintf(stderr, "------ Running test: %s from %s ------\n",
+                t->name, t->file);
+        rc = xvfb_wrapper(t->func, NULL);
+        if (rc != EXIT_SUCCESS) {
             break;
         }
     }

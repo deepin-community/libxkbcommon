@@ -1,35 +1,19 @@
 /*
  * Copyright © 2012 Intel Corporation
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  *
  * Author: Daniel Stone <daniel@fooishbar.org>
  */
 
 #include "config.h"
 
-#include "test.h"
-#include "context.h"
-
+#include <stdlib.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+
+#include "test.h"
+#include "xkbcommon/xkbcommon.h"
+#include "context.h"
 
 /* keeps a cache of all makedir/maketmpdir directories so we can free and
  * rmdir them in one go, see unmakedirs() */
@@ -44,7 +28,8 @@ struct env {
 } environment[64];
 int nenviron;
 
-static void buffer_env(const char *key)
+static void
+buffer_env(const char *key)
 {
     char *v = getenv(key);
 
@@ -53,7 +38,8 @@ static void buffer_env(const char *key)
     nenviron++;
 }
 
-static void restore_env(void)
+static void
+restore_env(void)
 {
     for (int i = 0; i < nenviron; i++) {
         char *key = environment[i].key,
@@ -71,7 +57,8 @@ static void restore_env(void)
     memset(environment, 0, sizeof(environment));
 }
 
-static const char *makedir(const char *parent, const char *path)
+static const char *
+makedir(const char *parent, const char *path)
 {
     char *dirname = test_makedir(parent, path);
     dirnames[ndirs++] = dirname;
@@ -85,7 +72,8 @@ static const char *maketmpdir(void)
     return tmpdir;
 }
 
-static void unmakedirs(void)
+static void
+unmakedirs(void)
 {
     /* backwards order for rmdir to work */
     for (int i = ndirs - 1; i >= 0; i--) {
@@ -105,7 +93,6 @@ test_config_root_include_path(void)
     struct xkb_context *ctx;
     const char *tmpdir;
     const char *context_path;
-    int nincludes;
 
     buffer_env("XKB_CONFIG_ROOT");
     buffer_env("HOME");
@@ -116,9 +103,9 @@ test_config_root_include_path(void)
     unsetenv("HOME");
     unsetenv("XDG_CONFIG_HOME");
 
-    /* built-in path is last */
+    /* Valid built-in path is last */
     ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
-    nincludes = xkb_context_num_include_paths(ctx);
+    const unsigned int nincludes = xkb_context_num_include_paths(ctx);
     assert(nincludes >= 1);
     context_path = xkb_context_include_path_get(ctx, nincludes - 1);
     assert(strcmp(context_path, tmpdir) == 0);
@@ -134,7 +121,6 @@ test_config_root_include_path_fallback(void)
     struct xkb_context *ctx;
     const char *xkbdir = DFLT_XKB_CONFIG_ROOT;
     const char *context_path;
-    int nincludes;
 
     /* quick and dirty check that the default directory exists.
      * It may not on a vanilla test box if we just run the test
@@ -147,6 +133,9 @@ test_config_root_include_path_fallback(void)
         return;
 
     buffer_env("XKB_CONFIG_ROOT");
+    buffer_env("XKB_CONFIG_UNVERSIONED_EXTENSIONS_PATH");
+    buffer_env("XKB_CONFIG_VERSIONED_EXTENSIONS_PATH");
+    buffer_env("XKB_CONFIG_EXTRA_PATH");
     buffer_env("HOME");
     buffer_env("XDG_CONFIG_HOME");
 
@@ -154,12 +143,44 @@ test_config_root_include_path_fallback(void)
     unsetenv("HOME");
     unsetenv("XDG_CONFIG_HOME");
 
-    /* built-in path is last */
+    /* Valid built-in path is last */
+    ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+    unsigned int nincludes = xkb_context_num_include_paths(ctx);
+    assert(nincludes >= 1);
+    context_path = xkb_context_include_path_get(ctx, nincludes - 1);
+    assert(strcmp(context_path, xkbdir) == 0);
+    xkb_context_unref(ctx);
+
+    /* Invalid built-in path is replaced with legacy X11 path */
+    setenv("XKB_CONFIG_ROOT", "¡NONSENSE!", 1);
     ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
     nincludes = xkb_context_num_include_paths(ctx);
     assert(nincludes >= 1);
     context_path = xkb_context_include_path_get(ctx, nincludes - 1);
-    assert(strcmp(context_path, xkbdir) == 0);
+    assert(strcmp(context_path, DFLT_XKB_LEGACY_ROOT) == 0);
+    xkb_context_unref(ctx);
+
+    setenv("XKB_CONFIG_UNVERSIONED_EXTENSIONS_PATH", "", 1);
+    setenv("XKB_CONFIG_VERSIONED_EXTENSIONS_PATH", "", 1);
+
+    /* Ensure some path is available */
+    const char *tmpdir = maketmpdir();
+    setenv("XKB_CONFIG_EXTRA_PATH", tmpdir, 1);
+
+    /* Invalid built-in path and deliberately skipped legacy X11 path */
+    setenv("XKB_CONFIG_ROOT", "", 1);
+    ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+    nincludes = xkb_context_num_include_paths(ctx);
+    assert(nincludes >= 1);
+    context_path = xkb_context_include_path_get(ctx, nincludes - 1);
+    assert(strcmp(context_path, tmpdir) == 0);
+    xkb_context_unref(ctx);
+
+    /* No valid path */
+    setenv("XKB_CONFIG_EXTRA_PATH", "", 1);
+    ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+    nincludes = xkb_context_num_include_paths(ctx);
+    assert(nincludes == 0);
     xkb_context_unref(ctx);
 
     unmakedirs();
@@ -258,6 +279,8 @@ test_include_order(void)
     const char *context_path;
 
     buffer_env("XKB_CONFIG_ROOT");
+    buffer_env("XKB_CONFIG_UNVERSIONED_EXTENSIONS_PATH");
+    buffer_env("XKB_CONFIG_VERSIONED_EXTENSIONS_PATH");
     buffer_env("XDG_CONFIG_HOME");
     buffer_env("HOME");
 
@@ -268,6 +291,8 @@ test_include_order(void)
     setenv("HOME", tmpdir, 1);
     setenv("XDG_CONFIG_HOME", tmpdir, 1);
     setenv("XKB_CONFIG_ROOT", xkb_root_path, 1);
+    setenv("XKB_CONFIG_UNVERSIONED_EXTENSIONS_PATH", "", 1);
+    setenv("XKB_CONFIG_VERSIONED_EXTENSIONS_PATH", "", 1);
 
     ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
     assert(xkb_context_num_include_paths(ctx) >= 3);
@@ -281,6 +306,59 @@ test_include_order(void)
     context_path = xkb_context_include_path_get(ctx, 2);
     assert(strcmp(context_path, xkb_root_path) == 0);
 
+    xkb_context_unref(ctx);
+
+    unmakedirs();
+    restore_env();
+}
+
+static void
+test_delayed_includes(void)
+{
+    buffer_env("XKB_CONFIG_ROOT");
+    buffer_env("XKB_CONFIG_UNVERSIONED_EXTENSIONS_PATH");
+    buffer_env("XKB_CONFIG_VERSIONED_EXTENSIONS_PATH");
+    buffer_env("XKB_CONFIG_EXTRA_PATH");
+    buffer_env("XDG_CONFIG_HOME");
+    buffer_env("HOME");
+
+    const char * const xkb_root_path = maketmpdir();
+
+    /* Empty paths, so that currently a call to
+     * xkb_context_include_path_append_default() would fail */
+    setenv("XKB_CONFIG_ROOT", "", 1);
+    setenv("XKB_CONFIG_UNVERSIONED_EXTENSIONS_PATH", "", 1);
+    setenv("XKB_CONFIG_VERSIONED_EXTENSIONS_PATH", "", 1);
+    setenv("XKB_CONFIG_EXTRA_PATH", "", 1);
+    unsetenv("XDG_CONFIG_HOME");
+    unsetenv("HOME");
+
+    struct xkb_context *ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+    /* Context should initialize correctly, despite no include path is
+     * currently available */
+    assert(ctx);
+    assert(xkb_context_num_include_paths(ctx) == 0);
+    /* Setting XKB_CONFIG_ROOT correctly is too late, because we used API that
+     * requires to initialize the include paths */
+    setenv("XKB_CONFIG_ROOT", xkb_root_path, 1);
+    assert(xkb_context_num_include_paths(ctx) == 0);
+    /* We cannot add further paths, since the default paths failed */
+    assert(!xkb_context_include_path_append(ctx, xkb_root_path));
+    xkb_context_unref(ctx);
+
+    setenv("XKB_CONFIG_ROOT", "", 1);
+    ctx = xkb_context_new(XKB_CONTEXT_NO_FLAGS);
+    /* Context should initialize correctly, despite no include path is
+     * currently available */
+    assert(ctx);
+    /* Set XKB_CONFIG_ROOT correctly before using any API that requires the
+     * to initialize the include paths */
+    setenv("XKB_CONFIG_ROOT", xkb_root_path, 1);
+    assert(xkb_context_num_include_paths(ctx) == 1);
+    const char * const context_path = xkb_context_include_path_get(ctx, 0);
+    assert(strcmp(context_path, xkb_root_path) == 0);
+    assert(xkb_context_include_path_append(ctx, xkb_root_path) == 1);
+    assert(xkb_context_num_include_paths(ctx) == 2);
     xkb_context_unref(ctx);
 
     unmakedirs();
@@ -317,6 +395,7 @@ main(void)
     test_xdg_include_path();
     test_xdg_include_path_fallback();
     test_include_order();
+    test_delayed_includes();
 
-    return 0;
+    return EXIT_SUCCESS;
 }

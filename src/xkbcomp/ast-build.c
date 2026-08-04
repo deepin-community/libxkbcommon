@@ -1,73 +1,39 @@
-/************************************************************
+/*
+ * For HPND
  * Copyright (c) 1994 by Silicon Graphics Computer Systems, Inc.
  *
- * Permission to use, copy, modify, and distribute this
- * software and its documentation for any purpose and without
- * fee is hereby granted, provided that the above copyright
- * notice appear in all copies and that both that copyright
- * notice and this permission notice appear in supporting
- * documentation, and that the name of Silicon Graphics not be
- * used in advertising or publicity pertaining to distribution
- * of the software without specific prior written permission.
- * Silicon Graphics makes no representation about the suitability
- * of this software for any purpose. It is provided "as is"
- * without any express or implied warranty.
- *
- * SILICON GRAPHICS DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS
- * SOFTWARE, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
- * AND FITNESS FOR A PARTICULAR PURPOSE. IN NO EVENT SHALL SILICON
- * GRAPHICS BE LIABLE FOR ANY SPECIAL, INDIRECT OR CONSEQUENTIAL
- * DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE,
- * DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE
- * OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION  WITH
- * THE USE OR PERFORMANCE OF THIS SOFTWARE.
- *
- ********************************************************/
-
-/*
+ * For MIT:
  * Copyright © 2012 Intel Corporation
  * Copyright © 2012 Ran Benita <ran234@gmail.com>
  *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: HPND AND MIT
  *
  * Author: Daniel Stone <daniel@fooishbar.org>
- *         Ran Benita <ran234@gmail.com>
+ * Author: Ran Benita <ran234@gmail.com>
  */
 
 #include "config.h"
 
+#include <stdint.h>
+
+#include "xkbcommon/xkbcommon-keysyms.h"
+#include "messages-codes.h"
 #include "xkbcomp-priv.h"
+#include "ast.h"
 #include "ast-build.h"
 #include "include.h"
+#include "keysym.h"
+#include "utf8-decoding.h"
 
 static ExprDef *
-ExprCreate(enum expr_op_type op, enum expr_value_type type, size_t size)
+ExprCreate(enum stmt_type op)
 {
-    ExprDef *expr = malloc(size);
+    ExprDef *expr = malloc(sizeof(*expr));
     if (!expr)
         return NULL;
 
-    expr->common.type = STMT_EXPR;
+    expr->common.type = op;
     expr->common.next = NULL;
-    expr->expr.op = op;
-    expr->expr.value_type = type;
 
     return expr;
 }
@@ -75,7 +41,7 @@ ExprCreate(enum expr_op_type op, enum expr_value_type type, size_t size)
 ExprDef *
 ExprCreateString(xkb_atom_t str)
 {
-    ExprDef *expr = ExprCreate(EXPR_VALUE, EXPR_TYPE_STRING, sizeof(ExprString));
+    ExprDef *expr = ExprCreate(STMT_EXPR_STRING_LITERAL);
     if (!expr)
         return NULL;
     expr->string.str = str;
@@ -83,9 +49,9 @@ ExprCreateString(xkb_atom_t str)
 }
 
 ExprDef *
-ExprCreateInteger(int ival)
+ExprCreateInteger(int64_t ival)
 {
-    ExprDef *expr = ExprCreate(EXPR_VALUE, EXPR_TYPE_INT, sizeof(ExprInteger));
+    ExprDef *expr = ExprCreate(STMT_EXPR_INTEGER_LITERAL);
     if (!expr)
         return NULL;
     expr->integer.ival = ival;
@@ -95,7 +61,7 @@ ExprCreateInteger(int ival)
 ExprDef *
 ExprCreateFloat(void)
 {
-    ExprDef *expr = ExprCreate(EXPR_VALUE, EXPR_TYPE_FLOAT, sizeof(ExprFloat));
+    ExprDef *expr = ExprCreate(STMT_EXPR_FLOAT_LITERAL);
     if (!expr)
         return NULL;
     return expr;
@@ -104,7 +70,7 @@ ExprCreateFloat(void)
 ExprDef *
 ExprCreateBoolean(bool set)
 {
-    ExprDef *expr = ExprCreate(EXPR_VALUE, EXPR_TYPE_BOOLEAN, sizeof(ExprBoolean));
+    ExprDef *expr = ExprCreate(STMT_EXPR_BOOLEAN_LITERAL);
     if (!expr)
         return NULL;
     expr->boolean.set = set;
@@ -114,7 +80,7 @@ ExprCreateBoolean(bool set)
 ExprDef *
 ExprCreateKeyName(xkb_atom_t key_name)
 {
-    ExprDef *expr = ExprCreate(EXPR_VALUE, EXPR_TYPE_KEYNAME, sizeof(ExprKeyName));
+    ExprDef *expr = ExprCreate(STMT_EXPR_KEYNAME_LITERAL);
     if (!expr)
         return NULL;
     expr->key_name.key_name = key_name;
@@ -122,9 +88,19 @@ ExprCreateKeyName(xkb_atom_t key_name)
 }
 
 ExprDef *
+ExprCreateKeySym(xkb_keysym_t keysym)
+{
+    ExprDef *expr = ExprCreate(STMT_EXPR_KEYSYM_LITERAL);
+    if (!expr)
+        return NULL;
+    expr->keysym.keysym = keysym;
+    return expr;
+}
+
+ExprDef *
 ExprCreateIdent(xkb_atom_t ident)
 {
-    ExprDef *expr = ExprCreate(EXPR_IDENT, EXPR_TYPE_UNKNOWN, sizeof(ExprIdent));
+    ExprDef *expr = ExprCreate(STMT_EXPR_IDENT);
     if (!expr)
         return NULL;
     expr->ident.ident = ident;
@@ -132,10 +108,9 @@ ExprCreateIdent(xkb_atom_t ident)
 }
 
 ExprDef *
-ExprCreateUnary(enum expr_op_type op, enum expr_value_type type,
-                ExprDef *child)
+ExprCreateUnary(enum stmt_type op, ExprDef *child)
 {
-    ExprDef *expr = ExprCreate(op, type, sizeof(ExprUnary));
+    ExprDef *expr = ExprCreate(op);
     if (!expr)
         return NULL;
     expr->unary.child = child;
@@ -143,17 +118,12 @@ ExprCreateUnary(enum expr_op_type op, enum expr_value_type type,
 }
 
 ExprDef *
-ExprCreateBinary(enum expr_op_type op, ExprDef *left, ExprDef *right)
+ExprCreateBinary(enum stmt_type op, ExprDef *left, ExprDef *right)
 {
-    ExprDef *expr = ExprCreate(op, EXPR_TYPE_UNKNOWN, sizeof(ExprBinary));
+    ExprDef *expr = ExprCreate(op);
     if (!expr)
         return NULL;
 
-    if (op == EXPR_ASSIGN || left->expr.value_type == EXPR_TYPE_UNKNOWN)
-        expr->expr.value_type = right->expr.value_type;
-    else if (left->expr.value_type == right->expr.value_type ||
-             right->expr.value_type == EXPR_TYPE_UNKNOWN)
-        expr->expr.value_type = left->expr.value_type;
     expr->binary.left = left;
     expr->binary.right = right;
 
@@ -163,7 +133,7 @@ ExprCreateBinary(enum expr_op_type op, ExprDef *left, ExprDef *right)
 ExprDef *
 ExprCreateFieldRef(xkb_atom_t element, xkb_atom_t field)
 {
-    ExprDef *expr = ExprCreate(EXPR_FIELD_REF, EXPR_TYPE_UNKNOWN, sizeof(ExprFieldRef));
+    ExprDef *expr = ExprCreate(STMT_EXPR_FIELD_REF);
     if (!expr)
         return NULL;
     expr->field_ref.element = element;
@@ -174,7 +144,7 @@ ExprCreateFieldRef(xkb_atom_t element, xkb_atom_t field)
 ExprDef *
 ExprCreateArrayRef(xkb_atom_t element, xkb_atom_t field, ExprDef *entry)
 {
-    ExprDef *expr = ExprCreate(EXPR_ARRAY_REF, EXPR_TYPE_UNKNOWN, sizeof(ExprArrayRef));
+    ExprDef *expr = ExprCreate(STMT_EXPR_ARRAY_REF);
     if (!expr)
         return NULL;
     expr->array_ref.element = element;
@@ -184,9 +154,15 @@ ExprCreateArrayRef(xkb_atom_t element, xkb_atom_t field, ExprDef *entry)
 }
 
 ExprDef *
+ExprEmptyList(void)
+{
+    return ExprCreate(STMT_EXPR_EMPTY_LIST);
+}
+
+ExprDef *
 ExprCreateAction(xkb_atom_t name, ExprDef *args)
 {
-    ExprDef *expr = ExprCreate(EXPR_ACTION_DECL, EXPR_TYPE_UNKNOWN, sizeof(ExprAction));
+    ExprDef *expr = ExprCreate(STMT_EXPR_ACTION_DECL);
     if (!expr)
         return NULL;
     expr->action.name = name;
@@ -197,7 +173,7 @@ ExprCreateAction(xkb_atom_t name, ExprDef *args)
 ExprDef *
 ExprCreateActionList(ExprDef *actions)
 {
-    ExprDef *expr = ExprCreate(EXPR_ACTION_LIST, EXPR_TYPE_ACTIONS, sizeof(ExprActionList));
+    ExprDef *expr = ExprCreate(STMT_EXPR_ACTION_LIST);
     if (!expr)
         return NULL;
     expr->actions.actions = actions;
@@ -205,61 +181,101 @@ ExprCreateActionList(ExprDef *actions)
 }
 
 ExprDef *
-ExprCreateKeysymList(xkb_keysym_t sym)
+ExprCreateKeySymList(xkb_keysym_t sym)
 {
-    ExprDef *expr = ExprCreate(EXPR_KEYSYM_LIST, EXPR_TYPE_SYMBOLS, sizeof(ExprKeysymList));
+    ExprDef *expr = ExprCreate(STMT_EXPR_KEYSYM_LIST);
     if (!expr)
         return NULL;
-
     darray_init(expr->keysym_list.syms);
-    darray_init(expr->keysym_list.symsMapIndex);
-    darray_init(expr->keysym_list.symsNumEntries);
-
-    darray_append(expr->keysym_list.syms, sym);
-    darray_append(expr->keysym_list.symsMapIndex, 0);
-    darray_append(expr->keysym_list.symsNumEntries, 1);
-
+    if (sym == XKB_KEY_NoSymbol) {
+        /* Discard NoSymbol */
+    } else {
+        darray_append(expr->keysym_list.syms, sym);
+    }
     return expr;
 }
 
 ExprDef *
-ExprCreateMultiKeysymList(ExprDef *expr)
+ExprAppendKeySymList(ExprDef *expr, xkb_keysym_t sym)
 {
-    unsigned nLevels = darray_size(expr->keysym_list.symsMapIndex);
-
-    darray_resize(expr->keysym_list.symsMapIndex, 1);
-    darray_resize(expr->keysym_list.symsNumEntries, 1);
-    darray_item(expr->keysym_list.symsMapIndex, 0) = 0;
-    darray_item(expr->keysym_list.symsNumEntries, 0) = nLevels;
-
+    if (sym == XKB_KEY_NoSymbol) {
+        /* Discard NoSymbol */
+    } else {
+        darray_append(expr->keysym_list.syms, sym);
+    }
     return expr;
 }
 
 ExprDef *
-ExprAppendKeysymList(ExprDef *expr, xkb_keysym_t sym)
+ExprKeySymListAppendString(struct scanner *scanner,
+                           ExprDef *expr, const char *string)
 {
-    unsigned nSyms = darray_size(expr->keysym_list.syms);
-
-    darray_append(expr->keysym_list.symsMapIndex, nSyms);
-    darray_append(expr->keysym_list.symsNumEntries, 1);
-    darray_append(expr->keysym_list.syms, sym);
-
+    /* TODO: use strnlen with max len = 4 * MAX_KEYSYMS_LIST_LENGTH */
+    const size_t len = strlen(string);
+    size_t idx = 0;
+    size_t idx_cp = 1;
+    while (idx < len) {
+        size_t count = 0;
+        uint32_t cp = utf8_next_code_point(string + idx, len - idx, &count);
+        if (cp == INVALID_UTF8_CODE_POINT) {
+            scanner_err(scanner, XKB_ERROR_INVALID_FILE_ENCODING,
+                        "Cannot convert string to keysyms: "
+                        "Invalid UTF-8 encoding starting at byte position %zu "
+                        "(code point position: %zu).",
+                        idx + 1, idx_cp);
+            goto error;
+        }
+        const xkb_keysym_t sym = xkb_utf32_to_keysym(cp);
+        if (sym == XKB_KEY_NoSymbol) {
+            scanner_err(scanner, XKB_LOG_MESSAGE_NO_ID,
+                        "Cannot convert string to keysyms: Unicode code point "
+                        "U+04%"PRIX32" has no keysym equivalent"
+                        "(byte position: %zu, code point position: %zu).",
+                        cp, idx + 1, idx_cp);
+            goto error;
+        }
+        darray_append(expr->keysym_list.syms, sym);
+        idx += count;
+        idx_cp++;
+    }
+    assert(string[idx] == '\0');
     return expr;
+error:
+    FreeStmt((ParseCommon*) expr);
+    return NULL;
 }
 
-ExprDef *
-ExprAppendMultiKeysymList(ExprDef *expr, ExprDef *append)
+xkb_keysym_t
+KeysymParseString(struct scanner *scanner, const char *string)
 {
-    unsigned nSyms = darray_size(expr->keysym_list.syms);
-    unsigned numEntries = darray_size(append->keysym_list.syms);
-
-    darray_append(expr->keysym_list.symsMapIndex, nSyms);
-    darray_append(expr->keysym_list.symsNumEntries, numEntries);
-    darray_concat(expr->keysym_list.syms, append->keysym_list.syms);
-
-    FreeStmt((ParseCommon *) append);
-
-    return expr;
+    const size_t len = strlen(string);
+    if (len == 0) {
+        scanner_err(scanner, XKB_LOG_MESSAGE_NO_ID,
+                    "Cannot convert string to single keysym: empty string.");
+        return XKB_KEY_NoSymbol;
+    }
+    size_t count = 0;
+    const uint32_t cp = utf8_next_code_point(string, len, &count);
+    if (cp == INVALID_UTF8_CODE_POINT) {
+        scanner_err(scanner, XKB_ERROR_INVALID_FILE_ENCODING,
+                    "Cannot convert string to single keysym: "
+                    "Invalid UTF-8 encoding.");
+        return XKB_KEY_NoSymbol;
+    } else if (count != len) {
+        scanner_err(scanner, XKB_ERROR_INVALID_FILE_ENCODING,
+                    "Cannot convert string to single keysym: "
+                    "Expected a single Unicode code point, got: \"%s\".",
+                    string);
+        return XKB_KEY_NoSymbol;
+    }
+    const xkb_keysym_t sym = xkb_utf32_to_keysym(cp);
+    if (sym == XKB_KEY_NoSymbol) {
+        scanner_err(scanner, XKB_LOG_MESSAGE_NO_ID,
+                    "Cannot convert string to single keysym: Unicode "
+                    "code point U+%04"PRIX32" has no keysym equivalent.",
+                    cp);
+    }
+    return sym;
 }
 
 KeycodeDef *
@@ -391,7 +407,7 @@ SymbolsCreate(xkb_atom_t keyName, VarDef *symbols)
 }
 
 GroupCompatDef *
-GroupCompatCreate(unsigned group, ExprDef *val)
+GroupCompatCreate(int64_t group, ExprDef *val)
 {
     GroupCompatDef *def = malloc(sizeof(*def));
     if (!def)
@@ -439,7 +455,7 @@ LedMapCreate(xkb_atom_t name, VarDef *body)
 }
 
 LedNameDef *
-LedNameCreate(unsigned ndx, ExprDef *name, bool virtual)
+LedNameCreate(int64_t ndx, ExprDef *name, bool virtual)
 {
     LedNameDef *def = malloc(sizeof(*def));
     if (!def)
@@ -511,10 +527,16 @@ IncludeCreate(struct xkb_context *ctx, char *str, enum merge_mode merge)
         incl->modifier = extra_data;
         incl->next_incl = NULL;
 
-        if (nextop == '|')
+        switch (nextop) {
+        case MERGE_AUGMENT_PREFIX:
             merge = MERGE_AUGMENT;
-        else
+            break;
+        case MERGE_REPLACE_PREFIX:
+            merge = MERGE_REPLACE;
+            break;
+        default:
             merge = MERGE_OVERRIDE;
+        }
     }
 
     if (first)
@@ -525,8 +547,7 @@ IncludeCreate(struct xkb_context *ctx, char *str, enum merge_mode merge)
     return first;
 
 err:
-    log_err(ctx,
-            XKB_ERROR_INVALID_INCLUDE_STATEMENT,
+    log_err(ctx, XKB_ERROR_INVALID_INCLUDE_STATEMENT,
             "Illegal include statement \"%s\"; Ignored\n", stmt);
     FreeInclude(first);
     free(stmt);
@@ -545,7 +566,7 @@ XkbFileCreate(enum xkb_file_type type, char *name, ParseCommon *defs,
 
     XkbEscapeMapName(name);
     file->file_type = type;
-    file->name = name ? name : strdup("(unnamed)");
+    file->name = name;
     file->defs = defs;
     file->flags = flags;
 
@@ -558,7 +579,7 @@ XkbFileFromComponents(struct xkb_context *ctx,
 {
     char *const components[] = {
         kkctgs->keycodes, kkctgs->types,
-        kkctgs->compat, kkctgs->symbols,
+        kkctgs->compatibility, kkctgs->symbols,
     };
     enum xkb_file_type type;
     IncludeStmt *include = NULL;
@@ -591,52 +612,6 @@ XkbFileFromComponents(struct xkb_context *ctx,
 err:
     FreeXkbFile((XkbFile *) defs);
     return NULL;
-}
-
-static void
-FreeExpr(ExprDef *expr)
-{
-    if (!expr)
-        return;
-
-    switch (expr->expr.op) {
-    case EXPR_NEGATE:
-    case EXPR_UNARY_PLUS:
-    case EXPR_NOT:
-    case EXPR_INVERT:
-        FreeStmt((ParseCommon *) expr->unary.child);
-        break;
-
-    case EXPR_DIVIDE:
-    case EXPR_ADD:
-    case EXPR_SUBTRACT:
-    case EXPR_MULTIPLY:
-    case EXPR_ASSIGN:
-        FreeStmt((ParseCommon *) expr->binary.left);
-        FreeStmt((ParseCommon *) expr->binary.right);
-        break;
-
-    case EXPR_ACTION_DECL:
-        FreeStmt((ParseCommon *) expr->action.args);
-        break;
-
-    case EXPR_ACTION_LIST:
-        FreeStmt((ParseCommon *) expr->actions.actions);
-        break;
-
-    case EXPR_ARRAY_REF:
-        FreeStmt((ParseCommon *) expr->array_ref.entry);
-        break;
-
-    case EXPR_KEYSYM_LIST:
-        darray_free(expr->keysym_list.syms);
-        darray_free(expr->keysym_list.symsMapIndex);
-        darray_free(expr->keysym_list.symsNumEntries);
-        break;
-
-    default:
-        break;
-    }
 }
 
 static void
@@ -673,9 +648,39 @@ FreeStmt(ParseCommon *stmt)
             /* stmt is already free'd here. */
             stmt = NULL;
             break;
-        case STMT_EXPR:
-            FreeExpr((ExprDef *) stmt);
+
+        case STMT_EXPR_NEGATE:
+        case STMT_EXPR_UNARY_PLUS:
+        case STMT_EXPR_NOT:
+        case STMT_EXPR_INVERT:
+            FreeStmt((ParseCommon *) ((ExprUnary *) stmt)->child);
             break;
+
+        case STMT_EXPR_DIVIDE:
+        case STMT_EXPR_ADD:
+        case STMT_EXPR_SUBTRACT:
+        case STMT_EXPR_MULTIPLY:
+        case STMT_EXPR_ASSIGN:
+            FreeStmt((ParseCommon *) ((ExprBinary *) stmt)->left);
+            FreeStmt((ParseCommon *) ((ExprBinary *) stmt)->right);
+            break;
+
+        case STMT_EXPR_ACTION_DECL:
+            FreeStmt((ParseCommon *) ((ExprAction *) stmt)->args);
+            break;
+
+        case STMT_EXPR_ACTION_LIST:
+            FreeStmt((ParseCommon *) ((ExprActionList *) stmt)->actions);
+            break;
+
+        case STMT_EXPR_ARRAY_REF:
+            FreeStmt((ParseCommon *) ((ExprArrayRef *) stmt)->entry);
+            break;
+
+        case STMT_EXPR_KEYSYM_LIST:
+            darray_free(((ExprKeysymList *) stmt)->syms);
+            break;
+
         case STMT_VAR:
             FreeStmt((ParseCommon *) ((VarDef *) stmt)->name);
             FreeStmt((ParseCommon *) ((VarDef *) stmt)->value);
@@ -769,7 +774,28 @@ static const char *stmt_type_strings[_STMT_NUM_VALUES] = {
     [STMT_INCLUDE] = "include statement",
     [STMT_KEYCODE] = "key name definition",
     [STMT_ALIAS] = "key alias definition",
-    [STMT_EXPR] = "expression",
+    [STMT_EXPR_STRING_LITERAL] = "string literal expression",
+    [STMT_EXPR_INTEGER_LITERAL] = "integer literal expression",
+    [STMT_EXPR_FLOAT_LITERAL] = "float literal expression",
+    [STMT_EXPR_BOOLEAN_LITERAL] = "boolean literal expression",
+    [STMT_EXPR_KEYNAME_LITERAL] = "key name expression",
+    [STMT_EXPR_KEYSYM_LITERAL] = "keysym expression",
+    [STMT_EXPR_IDENT] = "identifier expression",
+    [STMT_EXPR_ACTION_DECL] = "action declaration expression",
+    [STMT_EXPR_FIELD_REF] = "field reference expression",
+    [STMT_EXPR_ARRAY_REF] = "array reference expression",
+    [STMT_EXPR_EMPTY_LIST] = "empty list expression",
+    [STMT_EXPR_KEYSYM_LIST] = "keysym list expression",
+    [STMT_EXPR_ACTION_LIST] = "action list expression",
+    [STMT_EXPR_ADD] = "addition expression",
+    [STMT_EXPR_SUBTRACT] = "substraction expression",
+    [STMT_EXPR_MULTIPLY] = "multiplication expression",
+    [STMT_EXPR_DIVIDE] = "division expression",
+    [STMT_EXPR_ASSIGN] = "assignment expression",
+    [STMT_EXPR_NOT] = "logical negation expression",
+    [STMT_EXPR_NEGATE] = "arithmetic negation expression",
+    [STMT_EXPR_INVERT] = "bitwise inversion expression",
+    [STMT_EXPR_UNARY_PLUS] = "unary plus expression",
     [STMT_VAR] = "variable definition",
     [STMT_TYPE] = "key type definition",
     [STMT_INTERP] = "symbol interpretation definition",
@@ -789,49 +815,27 @@ stmt_type_to_string(enum stmt_type type)
     return stmt_type_strings[type];
 }
 
-static const char *expr_op_type_strings[_EXPR_NUM_VALUES] = {
-    [EXPR_VALUE] = "literal",
-    [EXPR_IDENT] = "identifier",
-    [EXPR_ACTION_DECL] = "action declaration",
-    [EXPR_FIELD_REF] = "field reference",
-    [EXPR_ARRAY_REF] = "array reference",
-    [EXPR_KEYSYM_LIST] = "list of keysyms",
-    [EXPR_ACTION_LIST] = "list of actions",
-    [EXPR_ADD] = "addition",
-    [EXPR_SUBTRACT] = "subtraction",
-    [EXPR_MULTIPLY] = "multiplication",
-    [EXPR_DIVIDE] = "division",
-    [EXPR_ASSIGN] = "assignment",
-    [EXPR_NOT] = "logical negation",
-    [EXPR_NEGATE] = "arithmetic negation",
-    [EXPR_INVERT] = "bitwise inversion",
-    [EXPR_UNARY_PLUS] = "unary plus",
-};
-
-const char *
-expr_op_type_to_string(enum expr_op_type type)
+char
+stmt_type_to_operator_char(enum stmt_type type)
 {
-    if (type >= _EXPR_NUM_VALUES)
-        return NULL;
-    return expr_op_type_strings[type];
-}
-
-static const char *expr_value_type_strings[_EXPR_TYPE_NUM_VALUES] = {
-    [EXPR_TYPE_UNKNOWN] = "unknown",
-    [EXPR_TYPE_BOOLEAN] = "boolean",
-    [EXPR_TYPE_INT] = "int",
-    [EXPR_TYPE_FLOAT] = "float",
-    [EXPR_TYPE_STRING] = "string",
-    [EXPR_TYPE_ACTION] = "action",
-    [EXPR_TYPE_ACTIONS] = "actions",
-    [EXPR_TYPE_KEYNAME] = "keyname",
-    [EXPR_TYPE_SYMBOLS] = "symbols",
-};
-
-const char *
-expr_value_type_to_string(enum expr_value_type type)
-{
-    if (type >= _EXPR_TYPE_NUM_VALUES)
-        return NULL;
-    return expr_value_type_strings[type];
+    switch (type) {
+    case STMT_EXPR_ADD:
+        return '+';
+    case STMT_EXPR_SUBTRACT:
+        return '-';
+    case STMT_EXPR_MULTIPLY:
+        return '*';
+    case STMT_EXPR_DIVIDE:
+        return '/';
+    case STMT_EXPR_NOT:
+        return '!';
+    case STMT_EXPR_NEGATE:
+        return '-';
+    case STMT_EXPR_INVERT:
+        return '~';
+    case STMT_EXPR_UNARY_PLUS:
+        return '+';
+    default:
+        return '\0';
+    }
 }
