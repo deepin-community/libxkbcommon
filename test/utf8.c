@@ -1,24 +1,6 @@
 /*
  * Copyright © 2014 Ran Benita <ran234@gmail.com>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "config.h"
@@ -29,8 +11,10 @@
 #include <stddef.h>
 #include <string.h>
 
+#include "src/keysym.h"
 #include "test.h"
 #include "utf8.h"
+#include "utf8-decoding.h"
 #include "utils.h"
 
 #define VALID(lit) assert(is_valid_utf8(lit, sizeof(lit)-1))
@@ -155,7 +139,7 @@ test_is_valid_utf8(void)
 
 static void
 check_utf32_to_utf8(uint32_t unichar, int expected_length, const char *expected) {
-    char buffer[7];
+    char buffer[XKB_KEYSYM_UTF8_MAX_SIZE];
     int length;
 
     length = utf32_to_utf8(unichar, buffer);
@@ -178,6 +162,26 @@ test_utf32_to_utf8(void)
     check_utf32_to_utf8(0xffffffff, 0, "");
 }
 
+static void
+/* Check roundtrip UTF-32 → UTF-8 → UTF-32 */
+test_utf8_to_utf32(void)
+{
+    char buffer[XKB_KEYSYM_UTF8_MAX_SIZE];
+    for (uint32_t cp = 0; cp < 0x10ffff; cp++) {
+        int length = utf32_to_utf8(cp, buffer) - 1;
+        /* Check surrogates */
+        if (is_surrogate(cp)) {
+            assert(length == -1);
+        } else {
+            assert(length > 0);
+            size_t length2 = 0;
+            uint32_t cp2 = utf8_next_code_point(buffer, (size_t)length, &length2);
+            assert(cp2 != INVALID_UTF8_CODE_POINT && cp2 == cp &&
+                   length2 == (size_t)length);
+        }
+    }
+}
+
 int
 main(void)
 {
@@ -185,6 +189,7 @@ main(void)
 
     test_is_valid_utf8();
     test_utf32_to_utf8();
+    test_utf8_to_utf32();
 
     return 0;
 }

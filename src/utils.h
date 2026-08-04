@@ -1,28 +1,10 @@
 /*
  * Copyright © 2012 Ran Benita <ran234@gmail.com>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
+#pragma once
 
-#ifndef UTILS_H
-#define UTILS_H 1
+#include "config.h"
 
 #include <errno.h>
 #include <inttypes.h>
@@ -50,14 +32,19 @@
 # ifndef S_ISREG
 #  define S_ISREG(m) (((m) & S_IFMT) == S_IFREG)
 # endif
+#ifdef _MSC_VER
 typedef SSIZE_T ssize_t;
+#endif
 #endif
 
 #include "darray.h"
 
-#define STATIC_ASSERT(expr, message) do { \
-    switch (0) { case 0: case (expr): ; } \
-} while (0)
+static inline bool
+is_aligned(const void *restrict pointer, size_t byte_count)
+{
+    return (uintptr_t) pointer % byte_count == 0;
+}
+
 
 #define ARRAY_SIZE(arr) ((sizeof(arr) / sizeof(*(arr))))
 
@@ -72,13 +59,21 @@ typedef SSIZE_T ssize_t;
 #define CONCAT(x,y) x ## y
 #define CONCAT2(x,y) CONCAT(x,y)
 
-/* Check if a character is valid in a string literal */
+/* Check if a Unicode code point is valid in a string literal */
 static inline bool
-is_valid_char(char c)
+is_valid_char(uint32_t cp)
 {
     /* Currently we only check for NULL character, but this could be extended
      * in the future to further ASCII control characters. */
-    return c != 0;
+    return cp != 0;
+}
+
+/* Check if a Unicode code point is a surrogate.
+ * Those code points are used only in UTF-16 encodings. */
+static inline bool
+is_surrogate(uint32_t cp)
+{
+    return (cp >= 0xd800 && cp <= 0xdfff);
 }
 
 char
@@ -120,9 +115,23 @@ istreq(const char *s1, const char *s2)
 }
 
 static inline bool
-istreq_prefix(const char *s1, const char *s2)
+istrneq(const char *s1, const char *s2, size_t len)
 {
-    return istrncmp(s1, s2, strlen(s1)) == 0;
+    return istrncmp(s1, s2, len) == 0;
+}
+
+#define istreq_prefix(s1, s2) istrneq(s1, s2, sizeof(s1) - 1)
+
+static inline char *
+strcpy_safe(char *dest, size_t size, const char *src) {
+    if (!dest || !size || !src)
+        return NULL;
+    const char * const limit = dest + size - 1;
+    while (dest < limit && *src) {
+        *dest++ = *src++;
+    }
+    *dest = '\0';
+    return *src ? NULL : dest;
 }
 
 static inline char *
@@ -231,10 +240,10 @@ is_graph(char ch)
  * Note: this is 1-based! It's more useful this way, and returns 0 when
  * mask is all 0s.
  */
-static inline unsigned
+static inline unsigned int
 msb_pos(uint32_t mask)
 {
-    unsigned pos = 0;
+    unsigned int pos = 0;
     while (mask) {
         pos++;
         mask >>= 1u;
@@ -289,52 +298,56 @@ open_file(const char *path);
 
 /* Compiler Attributes */
 
-#if defined(__GNUC__) && (__GNUC__ >= 4) && !defined(__CYGWIN__)
-# define XKB_EXPORT      __attribute__((visibility("default")))
-#elif defined(__SUNPRO_C) && (__SUNPRO_C >= 0x550)
-# define XKB_EXPORT      __global
-#else /* not gcc >= 4 and not Sun Studio >= 8 */
-# define XKB_EXPORT
+/* Private functions only exposed in tests. */
+#ifdef ENABLE_PRIVATE_APIS
+# if defined(__GNUC__) && !defined(__CYGWIN__)
+#  define XKB_EXPORT_PRIVATE __attribute__((visibility("default")))
+# elif defined(_WIN32)
+#  define XKB_EXPORT_PRIVATE __declspec(dllexport)
+# else
+#  define XKB_EXPORT_PRIVATE
+# endif
+#else
+# define XKB_EXPORT_PRIVATE
 #endif
 
 #if defined(__MINGW32__)
 # define ATTR_PRINTF(x,y) __attribute__((__format__(__MINGW_PRINTF_FORMAT, x, y)))
-#elif defined(__GNUC__) && ((__GNUC__ * 100 + __GNUC_MINOR__) >= 203)
+#elif defined(__GNUC__)
 # define ATTR_PRINTF(x,y) __attribute__((__format__(__printf__, x, y)))
-#else /* not gcc >= 2.3 */
+#else
 # define ATTR_PRINTF(x,y)
 #endif
 
-#if (defined(__GNUC__) && ((__GNUC__ * 100 + __GNUC_MINOR__) >= 205)) \
-    || (defined(__SUNPRO_C) && (__SUNPRO_C >= 0x590))
+#if defined(__GNUC__)
 # define ATTR_NORETURN __attribute__((__noreturn__))
 #else
 # define ATTR_NORETURN
 #endif /* GNUC  */
 
-#if (defined(__GNUC__) && (__GNUC__ * 100 + __GNUC_MINOR__) >= 296)
+#if defined(__GNUC__)
 #define ATTR_MALLOC  __attribute__((__malloc__))
 #else
 #define ATTR_MALLOC
 #endif
 
-#if defined(__GNUC__) && (__GNUC__ >= 4)
+#if defined(__GNUC__)
 # define ATTR_NULL_SENTINEL __attribute__((__sentinel__))
 #else
 # define ATTR_NULL_SENTINEL
-#endif /* GNUC >= 4 */
+#endif
 
-#if (defined(__GNUC__) && (__GNUC__ * 100 + __GNUC_MINOR__) >= 295)
+#if defined(__GNUC__)
 #define ATTR_PACKED  __attribute__((__packed__))
 #else
 #define ATTR_PACKED
 #endif
 
 #if !(defined(HAVE_ASPRINTF) && HAVE_ASPRINTF)
-int asprintf(char **strp, const char *fmt, ...) ATTR_PRINTF(2, 3);
+XKB_EXPORT_PRIVATE int asprintf(char **strp, const char *fmt, ...) ATTR_PRINTF(2, 3);
 # if !(defined(HAVE_VASPRINTF) && HAVE_VASPRINTF)
 #  include <stdarg.h>
-int vasprintf(char **strp, const char *fmt, va_list ap);
+XKB_EXPORT_PRIVATE int vasprintf(char **strp, const char *fmt, va_list ap);
 # endif /* !HAVE_VASPRINTF */
 #endif /* !HAVE_ASPRINTF */
 
@@ -383,5 +396,3 @@ asprintf_safe(const char *fmt, ...)
 
     return str;
 }
-
-#endif /* UTILS_H */

@@ -1,54 +1,20 @@
-/************************************************************
+/*
+ * For HPND:
  * Copyright (c) 1994 by Silicon Graphics Computer Systems, Inc.
  *
- * Permission to use, copy, modify, and distribute this
- * software and its documentation for any purpose and without
- * fee is hereby granted, provided that the above copyright
- * notice appear in all copies and that both that copyright
- * notice and this permission notice appear in supporting
- * documentation, and that the name of Silicon Graphics not be
- * used in advertising or publicity pertaining to distribution
- * of the software without specific prior written permission.
- * Silicon Graphics makes no representation about the suitability
- * of this software for any purpose. It is provided "as is"
- * without any express or implied warranty.
- *
- * SILICON GRAPHICS DISCLAIMS ALL WARRANTIES WITH REGARD TO THIS
- * SOFTWARE, INCLUDING ALL IMPLIED WARRANTIES OF MERCHANTABILITY
- * AND FITNESS FOR A PARTICULAR PURPOSE. IN NO EVENT SHALL SILICON
- * GRAPHICS BE LIABLE FOR ANY SPECIAL, INDIRECT OR CONSEQUENTIAL
- * DAMAGES OR ANY DAMAGES WHATSOEVER RESULTING FROM LOSS OF USE,
- * DATA OR PROFITS, WHETHER IN AN ACTION OF CONTRACT, NEGLIGENCE
- * OR OTHER TORTIOUS ACTION, ARISING OUT OF OR IN CONNECTION  WITH
- * THE USE OR PERFORMANCE OF THIS SOFTWARE.
- *
- ********************************************************/
-
-/*
+ * For MIT:
  * Copyright © 2012 Ran Benita <ran234@gmail.com>
  *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: HPND AND MIT
  */
+#pragma once
 
-#ifndef XKBCOMP_AST_H
-#define XKBCOMP_AST_H
+#include "config.h"
+
+#include "xkbcommon/xkbcommon.h"
+
+#include "atom.h"
+#include "darray.h"
 
 enum xkb_file_type {
     /* Component files, by order of compilation. */
@@ -56,20 +22,23 @@ enum xkb_file_type {
     FILE_TYPE_TYPES = 1,
     FILE_TYPE_COMPAT = 2,
     FILE_TYPE_SYMBOLS = 3,
+
+    /* File types which must be found in a keymap file. */
+    FIRST_KEYMAP_FILE_TYPE = FILE_TYPE_KEYCODES,
+    LAST_KEYMAP_FILE_TYPE = FILE_TYPE_SYMBOLS,
+
     /* Geometry is not compiled any more. */
     FILE_TYPE_GEOMETRY = 4,
 
     /* A top level file which includes the above files. */
     FILE_TYPE_KEYMAP,
 
-/* File types which must be found in a keymap file. */
-#define FIRST_KEYMAP_FILE_TYPE FILE_TYPE_KEYCODES
-#define LAST_KEYMAP_FILE_TYPE  FILE_TYPE_SYMBOLS
 
     /* This one doesn't mix with the others, but useful here as well. */
     FILE_TYPE_RULES,
 
-    _FILE_TYPE_NUM_ENTRIES
+    _FILE_TYPE_NUM_ENTRIES,
+    FILE_TYPE_INVALID = _FILE_TYPE_NUM_ENTRIES
 };
 
 enum stmt_type {
@@ -77,7 +46,29 @@ enum stmt_type {
     STMT_INCLUDE,
     STMT_KEYCODE,
     STMT_ALIAS,
-    STMT_EXPR,
+    STMT_EXPR_STRING_LITERAL,
+    STMT_EXPR_INTEGER_LITERAL,
+    STMT_EXPR_FLOAT_LITERAL,
+    STMT_EXPR_BOOLEAN_LITERAL,
+    STMT_EXPR_KEYNAME_LITERAL,
+    STMT_EXPR_KEYSYM_LITERAL,
+    STMT_EXPR_IDENT,
+    STMT_EXPR_ACTION_DECL,
+    STMT_EXPR_FIELD_REF,
+    STMT_EXPR_ARRAY_REF,
+    /* Needed because of the ambiguity between keysym and action empty lists */
+    STMT_EXPR_EMPTY_LIST,
+    STMT_EXPR_KEYSYM_LIST,
+    STMT_EXPR_ACTION_LIST,
+    STMT_EXPR_ADD,
+    STMT_EXPR_SUBTRACT,
+    STMT_EXPR_MULTIPLY,
+    STMT_EXPR_DIVIDE,
+    STMT_EXPR_ASSIGN,
+    STMT_EXPR_NOT,
+    STMT_EXPR_NEGATE,
+    STMT_EXPR_INVERT,
+    STMT_EXPR_UNARY_PLUS,
     STMT_VAR,
     STMT_TYPE,
     STMT_INTERP,
@@ -91,46 +82,12 @@ enum stmt_type {
     _STMT_NUM_VALUES
 };
 
-enum expr_value_type {
-    EXPR_TYPE_UNKNOWN = 0,
-    EXPR_TYPE_BOOLEAN,
-    EXPR_TYPE_INT,
-    EXPR_TYPE_FLOAT,
-    EXPR_TYPE_STRING,
-    EXPR_TYPE_ACTION,
-    EXPR_TYPE_ACTIONS,
-    EXPR_TYPE_KEYNAME,
-    EXPR_TYPE_SYMBOLS,
-
-    _EXPR_TYPE_NUM_VALUES
-};
-
-enum expr_op_type {
-    EXPR_VALUE,
-    EXPR_IDENT,
-    EXPR_ACTION_DECL,
-    EXPR_FIELD_REF,
-    EXPR_ARRAY_REF,
-    EXPR_KEYSYM_LIST,
-    EXPR_ACTION_LIST,
-    EXPR_ADD,
-    EXPR_SUBTRACT,
-    EXPR_MULTIPLY,
-    EXPR_DIVIDE,
-    EXPR_ASSIGN,
-    EXPR_NOT,
-    EXPR_NEGATE,
-    EXPR_INVERT,
-    EXPR_UNARY_PLUS,
-
-    _EXPR_NUM_VALUES
-};
-
 enum merge_mode {
     MERGE_DEFAULT,
     MERGE_AUGMENT,
     MERGE_OVERRIDE,
     MERGE_REPLACE,
+    _MERGE_MODE_NUM_ENTRIES,
 };
 
 const char *
@@ -139,11 +96,8 @@ xkb_file_type_to_string(enum xkb_file_type type);
 const char *
 stmt_type_to_string(enum stmt_type type);
 
-const char *
-expr_op_type_to_string(enum expr_op_type type);
-
-const char *
-expr_value_type_to_string(enum expr_value_type type);
+char
+stmt_type_to_operator_char(enum stmt_type type);
 
 typedef struct _ParseCommon  {
     struct _ParseCommon *next;
@@ -160,95 +114,96 @@ typedef struct _IncludeStmt {
     struct _IncludeStmt *next_incl;
 } IncludeStmt;
 
-typedef struct {
-    ParseCommon common;
-    enum expr_op_type op;
-    enum expr_value_type value_type;
-} ExprCommon;
-
 typedef union ExprDef ExprDef;
 
 typedef struct {
-    ExprCommon expr;
+    ParseCommon common;
     xkb_atom_t ident;
 } ExprIdent;
 
 typedef struct {
-    ExprCommon expr;
+    ParseCommon common;
     xkb_atom_t str;
 } ExprString;
 
 typedef struct {
-    ExprCommon expr;
+    ParseCommon common;
     bool set;
 } ExprBoolean;
 
 typedef struct {
-    ExprCommon expr;
-    int ival;
+    ParseCommon common;
+    int64_t ival;
 } ExprInteger;
 
 typedef struct {
-    ExprCommon expr;
+    ParseCommon common;
     /* We don't support floats, but we still represnt them in the AST, in
      * order to provide proper error messages. */
 } ExprFloat;
 
 typedef struct {
-    ExprCommon expr;
+    ParseCommon common;
     xkb_atom_t key_name;
 } ExprKeyName;
 
 typedef struct {
-    ExprCommon expr;
+    ParseCommon common;
+    /* Keysyms are resolved early, so this might contain `NoSymbol` in case of
+     * failure, to enable error recovery. */
+    xkb_keysym_t keysym;
+} ExprKeySym;
+
+typedef struct {
+    ParseCommon common;
     ExprDef *left;
     ExprDef *right;
 } ExprBinary;
 
 typedef struct {
-    ExprCommon expr;
+    ParseCommon common;
     ExprDef *child;
 } ExprUnary;
 
 typedef struct {
-    ExprCommon expr;
+    ParseCommon common;
     xkb_atom_t element;
     xkb_atom_t field;
 } ExprFieldRef;
 
 typedef struct {
-    ExprCommon expr;
+    ParseCommon common;
     xkb_atom_t element;
     xkb_atom_t field;
     ExprDef *entry;
 } ExprArrayRef;
 
 typedef struct {
-    ExprCommon expr;
+    ParseCommon common;
     xkb_atom_t name;
     ExprDef *args;
 } ExprAction;
 
 typedef struct {
-    ExprCommon expr;
+    ParseCommon common;
+    /* List of actions for a single level. */
     ExprDef *actions;
 } ExprActionList;
 
 typedef struct {
-    ExprCommon expr;
+    ParseCommon common;
+    /* List of keysym for a single level. */
     darray(xkb_keysym_t) syms;
-    darray(unsigned int) symsMapIndex;
-    darray(unsigned int) symsNumEntries;
 } ExprKeysymList;
 
 union ExprDef {
     ParseCommon common;
-    ExprCommon expr;
     ExprIdent ident;
     ExprString string;
     ExprBoolean boolean;
     ExprInteger integer;
     ExprKeyName key_name;
+    ExprKeySym keysym;
     ExprBinary binary;
     ExprUnary unary;
     ExprFieldRef field_ref;
@@ -311,7 +266,7 @@ typedef struct {
 typedef struct {
     ParseCommon common;
     enum merge_mode merge;
-    unsigned group;
+    int64_t group;
     ExprDef *def;
 } GroupCompatDef;
 
@@ -326,7 +281,7 @@ typedef struct {
 typedef struct {
     ParseCommon common;
     enum merge_mode merge;
-    unsigned ndx;
+    int64_t ndx;
     ExprDef *name;
     bool virtual;
 } LedNameDef;
@@ -356,5 +311,3 @@ typedef struct {
     ParseCommon *defs;
     enum xkb_map_flags flags;
 } XkbFile;
-
-#endif

@@ -1,27 +1,10 @@
 /*
  * Copyright (C) 2011 Joseph Adams <joeyadams3.14159@gmail.com>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a copy
- * of this software and associated documentation files (the "Software"), to deal
- * in the Software without restriction, including without limitation the rights
- * to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
- * copies of the Software, and to permit persons to whom the Software is
- * furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice shall be included in
- * all copies or substantial portions of the Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
- * AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
- * OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
- * THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
+#pragma once
 
-#ifndef CCAN_DARRAY_H
-#define CCAN_DARRAY_H
+#include "config.h"
 
 /* Originally taken from: https://ccodearchive.net/info/darray.html
  * But modified for libxkbcommon. */
@@ -31,7 +14,18 @@
 #include <assert.h>
 #include <limits.h>
 
-#define darray(type) struct { type *item; unsigned size; unsigned alloc; }
+typedef unsigned int darray_size_t;
+#define DARRAY_SIZE_T_WIDTH (sizeof(darray_size_t) * CHAR_BIT)
+#define DARRAY_SIZE_MAX UINT_MAX
+
+#define darray(type) struct {       \
+    /** Array of items */           \
+    type *item;                     \
+    /** Current size */             \
+    darray_size_t size;             \
+    /** Count of allocated items */ \
+    darray_size_t alloc;            \
+}
 
 #define darray_new() { 0, 0, 0 }
 
@@ -47,7 +41,7 @@
 #define darray_steal(arr, to, to_size) do { \
     *(to) = (arr).item; \
     if (to_size) \
-        *(unsigned int *) (to_size) = (arr).size; \
+        *(darray_size_t *) (to_size) = (arr).size; \
     darray_init(arr); \
 } while (0)
 
@@ -72,6 +66,8 @@ typedef darray (char)           darray_char;
 typedef darray (signed char)    darray_schar;
 typedef darray (unsigned char)  darray_uchar;
 
+typedef darray (char *)         darray_string;
+
 typedef darray (short)          darray_short;
 typedef darray (int)            darray_int;
 typedef darray (long)           darray_long;
@@ -83,6 +79,7 @@ typedef darray (unsigned long)  darray_ulong;
 /*** Access ***/
 
 #define darray_item(arr, i)     ((arr).item[i])
+#define darray_items(arr)       ((arr).item)
 #define darray_size(arr)        ((arr).size)
 #define darray_empty(arr)       ((arr).size == 0)
 
@@ -93,16 +90,27 @@ typedef darray (unsigned long)  darray_ulong;
     (arr).item[(arr).size - 1] = (__VA_ARGS__); \
 } while (0)
 
+#define darray_insert(arr, i, ...) do { \
+    darray_size_t __index = (i); \
+    darray_resize(arr, (arr).size+1); \
+    memmove( \
+        (arr).item + __index + 1, \
+        (arr).item + __index, \
+        ((arr).size - __index - 1) * sizeof(*(arr).item) \
+    ); \
+    (arr).item[__index] = (__VA_ARGS__); \
+} while(0)
+
 /*** Insertion (multiple items) ***/
 
 #define darray_append_items(arr, items, count) do { \
-    unsigned __count = (count), __oldSize = (arr).size; \
+    darray_size_t __count = (count), __oldSize = (arr).size; \
     darray_resize(arr, __oldSize + __count); \
     memcpy((arr).item + __oldSize, items, __count * sizeof(*(arr).item)); \
 } while (0)
 
 #define darray_from_items(arr, items, count) do { \
-    unsigned __count = (count); \
+    darray_size_t __count = (count); \
     darray_resize(arr, __count); \
     if (__count != 0) \
         memcpy((arr).item, items, __count * sizeof(*(arr).item)); \
@@ -111,36 +119,55 @@ typedef darray (unsigned long)  darray_ulong;
 #define darray_copy(arr_to, arr_from) \
     darray_from_items((arr_to), (arr_from).item, (arr_from).size)
 
-#define darray_concat(arr_to, arr_from) \
-    darray_append_items((arr_to), (arr_from).item, (arr_from).size)
+#define darray_concat(arr_to, arr_from) do { \
+    if ((arr_from).size > 0) \
+        darray_append_items((arr_to), (arr_from).item, (arr_from).size); \
+} while (0)
 
 /*** Removal ***/
 
 /* Warning: Do not call darray_remove_last on an empty darray. */
 #define darray_remove_last(arr) (--(arr).size)
 
+/* Warning, slow: Requires copying all elements after removed item. */
+#define darray_remove(arr, i) do { \
+    darray_size_t __index = (i); \
+    if (__index < (arr).size-1) \
+        memmove( \
+            &(arr).item[__index], \
+            &(arr).item[__index + 1], \
+            ((arr).size -1 - __index) * sizeof(*(arr).item) \
+        ); \
+    (arr).size--; \
+} while(0)
+
 /*** String buffer ***/
 
 #define darray_append_string(arr, str) do { \
     const char *__str = (str); \
-    darray_append_items(arr, __str, strlen(__str) + 1); \
+    darray_append_items(arr, __str, (darray_size_t) strlen(__str) + 1); \
     (arr).size--; \
 } while (0)
 
+/* Same as `darray_append_string` but do count the final '\0' in the size */
+#define darray_append_string0(arr, string) \
+    darray_append_items((arr), (string), strlen(string) + 1)
+
 #define darray_append_lit(arr, stringLiteral) do { \
-    darray_append_items(arr, stringLiteral, sizeof(stringLiteral)); \
+    darray_append_items(arr, stringLiteral, \
+                        (darray_size_t) sizeof(stringLiteral)); \
     (arr).size--; \
 } while (0)
 
 #define darray_appends_nullterminate(arr, items, count) do { \
-    unsigned __count = (count), __oldSize = (arr).size; \
+    darray_size_t __count = (count), __oldSize = (arr).size; \
     darray_resize(arr, __oldSize + __count + 1); \
     memcpy((arr).item + __oldSize, items, __count * sizeof(*(arr).item)); \
     (arr).item[--(arr).size] = 0; \
 } while (0)
 
 #define darray_prepends_nullterminate(arr, items, count) do { \
-    unsigned __count = (count), __oldSize = (arr).size; \
+    darray_size_t __count = (count), __oldSize = (arr).size; \
     darray_resize(arr, __count + __oldSize + 1); \
     memmove((arr).item + __count, (arr).item, \
             __oldSize * sizeof(*(arr).item)); \
@@ -154,7 +181,7 @@ typedef darray (unsigned long)  darray_ulong;
     darray_growalloc(arr, (arr).size = (newSize))
 
 #define darray_resize0(arr, newSize) do { \
-    unsigned __oldSize = (arr).size, __newSize = (newSize); \
+    darray_size_t __oldSize = (arr).size, __newSize = (newSize); \
     (arr).size = __newSize; \
     if (__newSize > __oldSize) { \
         darray_growalloc(arr, __newSize); \
@@ -169,7 +196,7 @@ typedef darray (unsigned long)  darray_ulong;
 } while (0)
 
 #define darray_growalloc(arr, need)   do { \
-    unsigned __need = (need); \
+    darray_size_t __need = (need); \
     if (__need > (arr).alloc) \
         darray_realloc(arr, darray_next_alloc((arr).alloc, __need, \
                                               sizeof(*(arr).item))); \
@@ -181,10 +208,12 @@ typedef darray (unsigned long)  darray_ulong;
                              ((arr).alloc = (arr).size) * sizeof(*(arr).item)); \
 } while (0)
 
-static inline unsigned
-darray_next_alloc(unsigned alloc, unsigned need, unsigned itemSize)
+#define darray_max_alloc(itemSize) (UINT_MAX / (itemSize))
+
+static inline darray_size_t
+darray_next_alloc(darray_size_t alloc, darray_size_t need, size_t itemSize)
 {
-    assert(need < UINT_MAX / itemSize / 2); /* Overflow. */
+    assert(need < darray_max_alloc(itemSize) / 2); /* Overflow. */
     if (alloc == 0)
         alloc = 4;
     while (alloc < need)
@@ -195,23 +224,26 @@ darray_next_alloc(unsigned alloc, unsigned need, unsigned itemSize)
 /*** Traversal ***/
 
 #define darray_foreach(i, arr) \
+    if ((arr).item) \
     for ((i) = &(arr).item[0]; (i) < &(arr).item[(arr).size]; (i)++)
 
 #define darray_foreach_from(i, arr, from) \
+    if ((arr).item) \
     for ((i) = &(arr).item[from]; (i) < &(arr).item[(arr).size]; (i)++)
 
 /* Iterate on index and value at the same time, like Python's enumerate. */
 #define darray_enumerate(idx, val, arr) \
+    if ((arr).item) \
     for ((idx) = 0, (val) = &(arr).item[0]; \
          (idx) < (arr).size; \
          (idx)++, (val)++)
 
 #define darray_enumerate_from(idx, val, arr, from) \
-    for ((idx) = (from), (val) = &(arr).item[0]; \
+    if ((arr).item) \
+    for ((idx) = (from), (val) = &(arr).item[from]; \
          (idx) < (arr).size; \
          (idx)++, (val)++)
 
 #define darray_foreach_reverse(i, arr) \
+    if ((arr).item) \
     for ((i) = &(arr).item[(arr).size - 1]; (arr).size > 0 && (i) >= &(arr).item[0]; (i)--)
-
-#endif /* CCAN_DARRAY_H */

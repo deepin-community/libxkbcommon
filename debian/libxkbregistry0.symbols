@@ -1,6 +1,7 @@
 libxkbregistry.so.0 libxkbregistry0 #MINVER#
 * Build-Depends-Package: libxkbregistry-dev
  V_1.0.0@V_1.0.0 1.0.0
+ V_1.11.0@V_1.11.0 1.12.3
  rxkb_context_get_log_level@V_1.0.0 1.0.0
  rxkb_context_get_user_data@V_1.0.0 1.0.0
  rxkb_context_include_path_append@V_1.0.0 1.0.0
@@ -53,6 +54,7 @@ libxkbregistry.so.0 libxkbregistry0 #MINVER#
  rxkb_option_group_next@V_1.0.0 1.0.0
  rxkb_option_group_ref@V_1.0.0 1.0.0
  rxkb_option_group_unref@V_1.0.0 1.0.0
+ rxkb_option_is_layout_specific@V_1.11.0 1.12.3
  rxkb_option_next@V_1.0.0 1.0.0
  rxkb_option_ref@V_1.0.0 1.0.0
  rxkb_option_unref@V_1.0.0 1.0.0

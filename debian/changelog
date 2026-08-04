@@ -1,3 +1,18 @@
+libxkbcommon (1.13.1-1) unstable; urgency=medium
+
+  * New upstream release.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Mon, 02 Feb 2026 08:41:10 +0200
+
+libxkbcommon (1.12.3-1) unstable; urgency=medium
+
+  * New upstream release.
+  * watch: Updated to version 5.
+  * install: Updated.
+  * install, symbols: Updated.
+
+ -- Timo Aaltonen <tjaalton@debian.org>  Thu, 30 Oct 2025 13:12:19 +0200
+
 libxkbcommon (1.7.0-2) unstable; urgency=medium
 
   * Rebuild for migration.

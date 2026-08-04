@@ -1,35 +1,14 @@
 /*
  * Copyright © 2012 Intel Corporation
  * Copyright © 2014 Ran Benita <ran234@gmail.com>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  *
  * Author: Rob Bradford <rob@linux.intel.com>
  */
 
 #include "config.h"
 
-#include <stddef.h>
-#include <stdbool.h>
-#include <inttypes.h>
-
+#include "utils.h"
 #include "utf8.h"
 
 /* Conformant encoding form conversion from UTF-32 to UTF-8.
@@ -43,8 +22,9 @@ utf32_to_utf8(uint32_t unichar, char *buffer)
     int count, shift, length;
     uint8_t head;
 
+    /* NOLINTBEGIN(bugprone-branch-clone) */
     if (unichar <= 0x007f) {
-        buffer[0] = unichar;
+        buffer[0] = (char) unichar;
         buffer[1] = '\0';
         return 2;
     }
@@ -53,7 +33,7 @@ utf32_to_utf8(uint32_t unichar, char *buffer)
         head = 0xc0;
     }
     /* Handle surrogates */
-    else if (0xd800 <= unichar && unichar <= 0xdfff) {
+    else if (is_surrogate(unichar)) {
         goto ill_formed_code_unit_subsequence;
     }
     else if (unichar <= 0xffff) {
@@ -67,11 +47,12 @@ utf32_to_utf8(uint32_t unichar, char *buffer)
     else {
         goto ill_formed_code_unit_subsequence;
     }
+    /* NOLINTEND(bugprone-branch-clone) */
 
     for (count = length - 1, shift = 0; count > 0; count--, shift += 6)
-        buffer[count] = 0x80 | ((unichar >> shift) & 0x3f);
+        buffer[count] = (char)(0x80 | ((unichar >> shift) & 0x3f));
 
-    buffer[0] = head | ((unichar >> shift) & 0x3f);
+    buffer[0] = (char)(head | ((unichar >> shift) & 0x3f));
     buffer[length] = '\0';
 
     return length + 1;
@@ -94,6 +75,7 @@ is_valid_utf8(const char *ss, size_t len)
      * We can optimize if needed. */
     while (i < len)
     {
+        /* NOLINTBEGIN(bugprone-branch-clone) */
         if (s[i] <= 0x7F) {
             tail_bytes = 0;
         }
@@ -136,6 +118,7 @@ is_valid_utf8(const char *ss, size_t len)
         else {
             return false;
         }
+        /* NOLINTEND(bugprone-branch-clone) */
 
         i++;
 

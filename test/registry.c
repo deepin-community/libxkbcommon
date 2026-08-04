@@ -1,24 +1,6 @@
 /*
  * Copyright © 2020 Red Hat, Inc.
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "config.h"
@@ -31,6 +13,8 @@
 #include <stdio.h>
 #include <sys/stat.h>
 #include <sys/types.h>
+#include <libxml/parser.h>
+#include <libxml/tree.h>
 
 #include "xkbcommon/xkbregistry.h"
 
@@ -214,6 +198,7 @@ test_create_rules(const char *ruleset,
             }
             fprintf(fp, "</layout>\n");
             l++;
+            next = l + 1;
         }
         fprintf(fp, "</layoutList>\n");
     }
@@ -338,7 +323,8 @@ find_models(struct rxkb_context *ctx, ...)
     va_start(args, ctx);
     name = va_arg(args, const char *);
     while(name) {
-        assert(++idx < 20); /* safety guard */
+        ++idx;
+        assert(idx < 20); /* safety guard */
         if (!find_model(ctx, name))
             goto out;
         name = va_arg(args, const char *);
@@ -386,7 +372,8 @@ find_layouts(struct rxkb_context *ctx, ...)
     name = va_arg(args, const char *);
     variant = va_arg(args, const char *);
     while(name) {
-        assert(++idx < 20); /* safety guard */
+        ++idx;
+        assert(idx < 20); /* safety guard */
         if (!find_layout(ctx, name, variant))
             goto out;
         name = va_arg(args, const char *);
@@ -395,6 +382,49 @@ find_layouts(struct rxkb_context *ctx, ...)
     };
 
     rc = true;
+out:
+    va_end(args);
+    return rc;
+}
+
+static bool
+check_layouts_order(struct rxkb_context *ctx, ...)
+{
+    va_list args;
+    const char *layout, *variant;
+    int idx = 0;
+    bool rc = false;
+    struct rxkb_layout *l = rxkb_layout_first(ctx);
+
+    va_start(args, ctx);
+    layout = va_arg(args, const char *);
+    variant = va_arg(args, const char *);
+    while(layout) {
+        ++idx;
+        assert(idx < 20); /* safety guard */
+        if (!l) {
+            fprintf(stderr, "ERROR: expected layout #%d \"%s(%s)\", got none\n",
+                    idx, layout, variant ? variant : "-");
+            goto out;
+        }
+        const char *v = rxkb_layout_get_variant(l);
+        if (!streq(rxkb_layout_get_name(l), layout) || !streq_null(v, variant)) {
+            fprintf(stderr, "ERROR: expected layout #%d \"%s(%s)\", got \"%s(%s)\"\n",
+                    idx, layout, variant ? variant : "-",
+                    rxkb_layout_get_name(l), v ? v : "-");
+            goto out;
+        }
+        layout = va_arg(args, const char *);
+        if (layout)
+            variant = va_arg(args, const char *);
+        l = rxkb_layout_next(l);
+    };
+    if (l) {
+        const char *v = rxkb_layout_get_variant(l);
+        fprintf(stderr, "ERROR: unexpected layout at #%d: \"%s(%s)\"\n",
+                idx + 1, rxkb_layout_get_name(l), v ? v : "-");
+    }
+    rc = l == NULL;
 out:
     va_end(args);
     return rc;
@@ -410,14 +440,6 @@ fetch_option_group(struct rxkb_context *ctx, const char *grp)
         g = rxkb_option_group_next(g);
     }
     return NULL;
-}
-
-static inline bool
-find_option_group(struct rxkb_context *ctx, const char *grp)
-{
-    struct rxkb_option_group *g = fetch_option_group(ctx, grp);
-    rxkb_option_group_unref(g);
-    return g != NULL;
 }
 
 static struct rxkb_option *
@@ -459,7 +481,8 @@ find_options(struct rxkb_context *ctx, ...)
     grp = va_arg(args, const char *);
     opt = va_arg(args, const char *);
     while(grp) {
-        assert(++idx < 20); /* safety guard */
+        ++idx;
+        assert(idx < 20); /* safety guard */
         if (!find_option(ctx, grp, opt))
             goto out;
         grp = va_arg(args, const char *);
@@ -513,7 +536,7 @@ cmp_layouts(struct test_layout *tl, struct rxkb_layout *l)
         return false;
 
     iso3166 = rxkb_layout_get_iso3166_first(l);
-    for (size_t i = 0; i < sizeof(tl->iso3166); i++) {
+    for (size_t i = 0; i < ARRAY_SIZE(tl->iso3166); i++) {
         const char *iso = tl->iso3166[i];
         if (iso == NULL && iso3166 == NULL)
             break;
@@ -528,7 +551,7 @@ cmp_layouts(struct test_layout *tl, struct rxkb_layout *l)
         return false;
 
     iso639 = rxkb_layout_get_iso639_first(l);
-    for (size_t i = 0; i < sizeof(tl->iso639); i++) {
+    for (size_t i = 0; i < ARRAY_SIZE(tl->iso639); i++) {
         const char *iso = tl->iso639[i];
         if (iso == NULL && iso639 == NULL)
             break;
@@ -889,6 +912,9 @@ test_load_merge(void)
     struct test_layout user_layouts[] =  {
         {"l2", NO_VARIANT, "lbrief2", "ldesc2"},
         {"l2", "v2", "vbrief2", "vdesc2"},
+        // Duplicate with system
+        {"l1", NO_VARIANT, "lbrief1bis", "ldesc1bis"},
+        {"l1", "v1", "vbrief1bis", "vdesc1bis"},
         {NULL},
     };
     struct test_option_group system_groups[] = {
@@ -951,6 +977,12 @@ test_load_merge(void)
     l = fetch_layout(ctx, "l2", "v2");
     assert(cmp_layouts(&user_layouts[1], l));
     rxkb_layout_unref(l);
+
+    /* Check that the duplicate layouts are skipped */
+    assert(check_layouts_order(ctx,
+                               "l1", NO_VARIANT, "l1", "v1",
+                               "l2", NO_VARIANT, "l2", "v2",
+                               NULL));
 
     g = fetch_option_group(ctx, "grp1");
     assert(cmp_option_groups(&system_groups[0], g, CMP_EXACT));
@@ -1065,11 +1097,36 @@ test_invalid_include(void)
     rxkb_context_unref(ctx);
 }
 
+/* Check that libxml2 error handler is reset after parsing */
+static void
+test_xml_error_handler(void)
+{
+    struct test_model system_models[] =  { {NULL} };
+    struct test_layout system_layouts[] =  { {NULL} };
+    struct test_option_group system_groups[] = { { NULL } };
+    struct rxkb_context *ctx;
+
+    ctx = test_setup_context(system_models, NULL,
+                             system_layouts, NULL,
+                             system_groups, NULL);
+    assert(ctx);
+    rxkb_context_unref(ctx);
+
+    const char invalid_xml[] = "<test";
+    /* This should trigger a segfault if error handler is not reset, because
+     * else it would use our error handler with an invalid (freed) context. */
+    xmlDocPtr doc = xmlParseMemory (invalid_xml, strlen(invalid_xml));
+    assert(!doc);
+    xmlFreeDoc (doc);
+    xmlCleanupParser();
+}
+
 int
 main(void)
 {
     test_init();
 
+    test_xml_error_handler();
     test_no_include_paths();
     test_invalid_include();
     test_load_basic();

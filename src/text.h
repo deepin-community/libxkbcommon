@@ -1,32 +1,20 @@
 /*
  * Copyright © 2009 Dan Nicholson
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
+#pragma once
 
-#ifndef TEXT_H
-#define TEXT_H
+#include "config.h"
+
+#include <stdbool.h>
+
+#include "xkbcommon/xkbcommon.h"
+#include "atom.h"
+#include "keymap.h"
 
 typedef struct {
     const char *name;
-    unsigned int value;
+    uint32_t value;
 } LookupEntry;
 
 bool
@@ -40,16 +28,14 @@ extern const LookupEntry ctrlMaskNames[];
 extern const LookupEntry modComponentMaskNames[];
 extern const LookupEntry groupComponentMaskNames[];
 extern const LookupEntry groupMaskNames[];
-extern const LookupEntry groupNames[];
-extern const LookupEntry levelNames[];
 extern const LookupEntry buttonNames[];
 extern const LookupEntry useModMapValueNames[];
 extern const LookupEntry actionTypeNames[];
 extern const LookupEntry symInterpretMatchMaskNames[];
 
 const char *
-ModMaskText(struct xkb_context *ctx, const struct xkb_mod_set *mods,
-            xkb_mod_mask_t mask);
+ModMaskText(struct xkb_context *ctx, enum mod_type type,
+            const struct xkb_mod_set *mods, xkb_mod_mask_t mask);
 
 const char *
 ModIndexText(struct xkb_context *ctx, const struct xkb_mod_set *mods,
@@ -68,9 +54,8 @@ const char *
 SIMatchText(enum xkb_match_operation type);
 
 const char *
-LedStateMaskText(struct xkb_context *ctx, enum xkb_state_component mask);
+LedStateMaskText(struct xkb_context *ctx, const LookupEntry *lookup,
+                 enum xkb_state_component mask);
 
 const char *
 ControlMaskText(struct xkb_context *ctx, enum xkb_action_controls mask);
-
-#endif /* TEXT_H */

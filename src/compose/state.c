@@ -1,27 +1,11 @@
 /*
  * Copyright © 2013 Ran Benita <ran234@gmail.com>
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "config.h"
+
+#include <assert.h>
 
 #include "table.h"
 #include "utils.h"
@@ -45,7 +29,7 @@ struct xkb_compose_state {
     uint32_t context;
 };
 
-XKB_EXPORT struct xkb_compose_state *
+struct xkb_compose_state *
 xkb_compose_state_new(struct xkb_compose_table *table,
                       enum xkb_compose_state_flags flags)
 {
@@ -65,16 +49,18 @@ xkb_compose_state_new(struct xkb_compose_table *table,
     return state;
 }
 
-XKB_EXPORT struct xkb_compose_state *
+struct xkb_compose_state *
 xkb_compose_state_ref(struct xkb_compose_state *state)
 {
+    assert(state->refcnt > 0);
     state->refcnt++;
     return state;
 }
 
-XKB_EXPORT void
+void
 xkb_compose_state_unref(struct xkb_compose_state *state)
 {
+    assert(!state || state->refcnt > 0);
     if (!state || --state->refcnt > 0)
         return;
 
@@ -82,13 +68,13 @@ xkb_compose_state_unref(struct xkb_compose_state *state)
     free(state);
 }
 
-XKB_EXPORT struct xkb_compose_table *
+struct xkb_compose_table *
 xkb_compose_state_get_compose_table(struct xkb_compose_state *state)
 {
     return state->table;
 }
 
-XKB_EXPORT enum xkb_compose_feed_result
+enum xkb_compose_feed_result
 xkb_compose_state_feed(struct xkb_compose_state *state, xkb_keysym_t keysym)
 {
     uint32_t context;
@@ -128,14 +114,14 @@ xkb_compose_state_feed(struct xkb_compose_state *state, xkb_keysym_t keysym)
     return XKB_COMPOSE_FEED_ACCEPTED;
 }
 
-XKB_EXPORT void
+void
 xkb_compose_state_reset(struct xkb_compose_state *state)
 {
     state->prev_context = 0;
     state->context = 0;
 }
 
-XKB_EXPORT enum xkb_compose_status
+enum xkb_compose_status
 xkb_compose_state_get_status(struct xkb_compose_state *state)
 {
     const struct compose_node *prev_node, *node;
@@ -155,7 +141,7 @@ xkb_compose_state_get_status(struct xkb_compose_state *state)
     return XKB_COMPOSE_COMPOSED;
 }
 
-XKB_EXPORT int
+int
 xkb_compose_state_get_utf8(struct xkb_compose_state *state,
                            char *buffer, size_t size)
 {
@@ -168,7 +154,7 @@ xkb_compose_state_get_utf8(struct xkb_compose_state *state,
     /* If there's no string specified, but only a keysym, try to do the
      * most helpful thing. */
     if (node->leaf.utf8 == 0 && node->leaf.keysym != XKB_KEY_NoSymbol) {
-        char utf8[7];
+        char utf8[XKB_KEYSYM_UTF8_MAX_SIZE];
         int ret;
 
         ret = xkb_keysym_to_utf8(node->leaf.keysym, utf8, sizeof(utf8));
@@ -190,7 +176,7 @@ fail:
     return 0;
 }
 
-XKB_EXPORT xkb_keysym_t
+xkb_keysym_t
 xkb_compose_state_get_one_sym(struct xkb_compose_state *state)
 {
     const struct compose_node *node =

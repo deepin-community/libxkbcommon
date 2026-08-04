@@ -1,28 +1,15 @@
 /*
  * Copyright © 2013 Ran Benita
- *
- * Permission is hereby granted, free of charge, to any person obtaining a
- * copy of this software and associated documentation files (the "Software"),
- * to deal in the Software without restriction, including without limitation
- * the rights to use, copy, modify, merge, publish, distribute, sublicense,
- * and/or sell copies of the Software, and to permit persons to whom the
- * Software is furnished to do so, subject to the following conditions:
- *
- * The above copyright notice and this permission notice (including the next
- * paragraph) shall be included in all copies or substantial portions of the
- * Software.
- *
- * THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
- * IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
- * FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT.  IN NO EVENT SHALL
- * THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
- * LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING
- * FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER
- * DEALINGS IN THE SOFTWARE.
+ * SPDX-License-Identifier: MIT
  */
 
 #include "config.h"
 
+#include <assert.h>
+
+#include "xkbcommon/xkbcommon.h"
+#include "atom.h"
+#include "keymap.h"
 #include "x11-priv.h"
 
 /*
@@ -61,30 +48,32 @@
  * We try not to trust the server too much and be paranoid. If we get
  * something which we definitely shouldn't, we fail.
  */
-#define FAIL_UNLESS(expr) do {                                          \
-    if (!(expr)) {                                                      \
-        log_err(keymap->ctx, XKB_LOG_MESSAGE_NO_ID,                                            \
-                "x11: failed to get keymap from X server: unmet condition in %s(): %s\n", \
-                __func__, STRINGIFY(expr));                             \
-        goto fail;                                                      \
-    }                                                                   \
+#define FAIL_UNLESS(expr) do {                              \
+    if (!(expr)) {                                          \
+        log_err(keymap->ctx, XKB_LOG_MESSAGE_NO_ID,         \
+                "x11: failed to get keymap from X server: " \
+                "unmet condition in %s(): %s\n",            \
+                __func__, STRINGIFY(expr));                 \
+        goto fail;                                          \
+    }                                                       \
 } while (0)
 
-#define FAIL_IF_BAD_REPLY(reply, request_name) do {                     \
-    if (!reply) {                                                       \
-        log_err(keymap->ctx, XKB_LOG_MESSAGE_NO_ID,                                            \
-                "x11: failed to get keymap from X server: %s request failed\n", \
-                (request_name));                                        \
-        goto fail;                                                      \
-    }                                                                   \
+#define FAIL_IF_BAD_REPLY(reply, request_name) do {         \
+    if (!(reply)) {                                           \
+        log_err(keymap->ctx, XKB_LOG_MESSAGE_NO_ID,         \
+                "x11: failed to get keymap from X server: " \
+                "%s request failed\n",                      \
+                (request_name));                            \
+        goto fail;                                          \
+    }                                                       \
 } while (0)
 
-#define ALLOC_OR_FAIL(arr, nmemb) do {                                  \
-    if ((nmemb) > 0) {                                                  \
-        (arr) = calloc((nmemb), sizeof(*(arr)));                        \
-        if (!(arr))                                                     \
-            goto fail;                                                  \
-    }                                                                   \
+#define ALLOC_OR_FAIL(arr, nmemb) do {                      \
+    if ((nmemb) > 0) {                                      \
+        (arr) = calloc((nmemb), sizeof(*(arr)));            \
+        if (!(arr))                                         \
+            goto fail;                                      \
+    }                                                       \
 } while (0)
 
 static const xcb_xkb_map_part_t get_map_required_components =
@@ -336,7 +325,7 @@ translate_action(union xkb_action *action, const xcb_xkb_action_t *wire)
 
         /* Treat high unknown actions as Private actions. */
         action->priv.type = wire->noaction.type;
-        STATIC_ASSERT(sizeof(action->priv.data) == 7 &&
+        static_assert(sizeof(action->priv.data) == 7 &&
                       sizeof(wire->noaction.pad0) == 7,
                       "The private action data must be 7 bytes long!");
         memcpy(action->priv.data, wire->noaction.pad0, 7);
@@ -356,6 +345,7 @@ get_types(struct xkb_keymap *keymap, xcb_connection_t *conn,
 
     keymap->num_types = reply->nTypes;
     ALLOC_OR_FAIL(keymap->types, keymap->num_types);
+    assert(types_length == (int) keymap->num_types);
 
     for (int i = 0; i < types_length; i++) {
         xcb_xkb_key_type_t *wire_type = types_iter.data;
@@ -375,6 +365,7 @@ get_types(struct xkb_keymap *keymap, xcb_connection_t *conn,
 
             type->num_entries = wire_type->nMapEntries;
             ALLOC_OR_FAIL(type->entries, type->num_entries);
+            assert(entries_length == (int) type->num_entries);
 
             for (int j = 0; j < entries_length; j++) {
                 xcb_xkb_kt_map_entry_t *wire_entry = entries_iter.data;
@@ -410,6 +401,9 @@ get_types(struct xkb_keymap *keymap, xcb_connection_t *conn,
             }
         }
 
+        /* Checked only when compiling a keymap from text */
+        type->required = true;
+
         xcb_xkb_key_type_next(&types_iter);
     }
 
@@ -433,6 +427,7 @@ get_sym_maps(struct xkb_keymap *keymap, xcb_connection_t *conn,
 
     keymap->min_key_code = reply->minKeyCode;
     keymap->max_key_code = reply->maxKeyCode;
+    keymap->num_keys = keymap->num_keys_low = reply->maxKeyCode + 1;
 
     ALLOC_OR_FAIL(keymap->keys, keymap->max_key_code + 1);
 
@@ -447,7 +442,7 @@ get_sym_maps(struct xkb_keymap *keymap, xcb_connection_t *conn,
         FAIL_UNLESS(key->num_groups <= ARRAY_SIZE(wire_sym_map->kt_index));
         ALLOC_OR_FAIL(key->groups, key->num_groups);
 
-        for (unsigned j = 0; j < key->num_groups; j++) {
+        for (xkb_layout_index_t j = 0; j < key->num_groups; j++) {
             FAIL_UNLESS(wire_sym_map->kt_index[j] < keymap->num_types);
             key->groups[j].type = &keymap->types[wire_sym_map->kt_index[j]];
 
@@ -471,15 +466,22 @@ get_sym_maps(struct xkb_keymap *keymap, xcb_connection_t *conn,
 
             FAIL_UNLESS((unsigned) syms_length == wire_sym_map->width * key->num_groups);
 
+            if (syms_length > 0)
+                key->explicit |= EXPLICIT_SYMBOLS;
+
             for (xkb_layout_index_t group = 0; group < key->num_groups; group++) {
                 for (xkb_level_index_t level = 0; level < wire_sym_map->width; level++) {
                     xcb_keysym_t wire_keysym = *syms_iter;
 
                     assert(key->groups[group].type != NULL);
-                    if (level < key->groups[group].type->num_levels &&
-                        wire_keysym != XKB_KEY_NoSymbol) {
+                    if (level < key->groups[group].type->num_levels) {
+                        /* Do not discard the keysym yet if it is NoSymbol, because
+                         * there may be an action set */
                         key->groups[group].levels[level].num_syms = 1;
-                        key->groups[group].levels[level].u.sym = wire_keysym;
+                        key->groups[group].levels[level].s.sym = wire_keysym;
+                        /* Set capitalization transformation */
+                        key->groups[group].levels[level].upper =
+                            xkb_keysym_to_upper(wire_keysym);
                     }
 
                     syms_iter++;
@@ -527,9 +529,17 @@ get_actions(struct xkb_keymap *keymap, xcb_connection_t *conn,
                     xcb_xkb_action_t *wire_action = acts_iter.data;
 
                     if (level < key->groups[group].type->num_levels) {
-                        union xkb_action *action = &key->groups[group].levels[level].action;
+                        key->groups[group].levels[level].num_actions = 1;
+                        union xkb_action *action = &key->groups[group].levels[level].a.action;
 
                         translate_action(action, wire_action);
+                        /* If the action and the keysym are both undefined,
+                         * discard them */
+                        if (action->type == ACTION_TYPE_NONE &&
+                            key->groups[group].levels[level].s.sym == XKB_KEY_NoSymbol) {
+                            key->groups[group].levels[level].num_syms = 0;
+                            key->groups[group].levels[level].num_actions = 0;
+                        }
                     }
 
                     xcb_xkb_action_next(&acts_iter);
@@ -555,7 +565,9 @@ get_vmods(struct xkb_keymap *keymap, xcb_connection_t *conn,
 
     keymap->mods.num_mods =
         NUM_REAL_MODS + MIN(msb_pos(reply->virtualMods), NUM_VMODS);
+    FAIL_UNLESS(keymap->mods.num_mods <= XKB_MAX_MODS);
 
+    static_assert(NUM_REAL_MODS + NUM_VMODS <= XKB_MAX_MODS, "");
     for (unsigned i = 0; i < NUM_VMODS; i++) {
         if (reply->virtualMods & (1u << i)) {
             uint8_t wire = *iter;
@@ -569,6 +581,9 @@ get_vmods(struct xkb_keymap *keymap, xcb_connection_t *conn,
     }
 
     return true;
+
+fail:
+    return false;
 }
 
 static bool
@@ -589,19 +604,32 @@ get_explicits(struct xkb_keymap *keymap, xcb_connection_t *conn,
         key = &keymap->keys[wire->keycode];
 
         if ((wire->explicit & XCB_XKB_EXPLICIT_KEY_TYPE_1) &&
-            key->num_groups > 0)
+            key->num_groups > 0) {
             key->groups[0].explicit_type = true;
+            key->explicit |= EXPLICIT_TYPES;
+        }
         if ((wire->explicit & XCB_XKB_EXPLICIT_KEY_TYPE_2) &&
-            key->num_groups > 1)
+            key->num_groups > 1) {
             key->groups[1].explicit_type = true;
+            key->explicit |= EXPLICIT_TYPES;
+        }
         if ((wire->explicit & XCB_XKB_EXPLICIT_KEY_TYPE_3) &&
-            key->num_groups > 2)
+            key->num_groups > 2) {
             key->groups[2].explicit_type = true;
+            key->explicit |= EXPLICIT_TYPES;
+        }
         if ((wire->explicit & XCB_XKB_EXPLICIT_KEY_TYPE_4) &&
-            key->num_groups > 3)
+            key->num_groups > 3) {
             key->groups[3].explicit_type = true;
-        if (wire->explicit & XCB_XKB_EXPLICIT_INTERPRET)
+            key->explicit |= EXPLICIT_TYPES;
+        }
+        if (wire->explicit & XCB_XKB_EXPLICIT_INTERPRET) {
             key->explicit |= EXPLICIT_INTERP;
+            /* Make all key groups have explicit actions too */
+            for (xkb_layout_index_t l = 0; l < key->num_groups; l++) {
+                key->groups[l].explicit_actions = true;
+            }
+        }
         if (wire->explicit & XCB_XKB_EXPLICIT_AUTO_REPEAT)
             key->explicit |= EXPLICIT_REPEAT;
         if (wire->explicit & XCB_XKB_EXPLICIT_V_MOD_MAP)
@@ -720,9 +748,11 @@ get_indicators(struct xkb_keymap *keymap, xcb_connection_t *conn,
         xcb_xkb_get_indicator_map_maps_iterator(reply);
 
     keymap->num_leds = msb_pos(reply->which);
+    FAIL_UNLESS(keymap->num_leds <= XKB_MAX_LEDS);
 
+    static_assert(XKB_MAX_LEDS == NUM_INDICATORS, "");
     for (unsigned i = 0; i < NUM_INDICATORS; i++) {
-        if (reply->which & (1u << i)) {
+        if (reply->which & (UINT32_C(1) << i)) {
             xcb_xkb_indicator_map_t *wire = iter.data;
             struct xkb_led *led = &keymap->leds[i];
 
@@ -760,6 +790,9 @@ get_indicators(struct xkb_keymap *keymap, xcb_connection_t *conn,
     }
 
     return true;
+
+fail:
+    return false;
 }
 
 static bool
@@ -818,6 +851,11 @@ get_sym_interprets(struct xkb_keymap *keymap, xcb_connection_t *conn,
         case XCB_XKB_SYM_INTERPRET_MATCH_EXACTLY:
             sym_interpret->match = MATCH_EXACTLY;
             break;
+        default:
+            log_err_func(keymap->ctx, XKB_LOG_MESSAGE_NO_ID,
+                         "unrecognized interpret match value: %#x\n",
+                         wire->match & XCB_XKB_SYM_INTERP_MATCH_OP_MASK);
+            goto fail;
         }
 
         sym_interpret->level_one_only =
@@ -830,8 +868,13 @@ get_sym_interprets(struct xkb_keymap *keymap, xcb_connection_t *conn,
             sym_interpret->virtual_mod = NUM_REAL_MODS + wire->virtualMod;
 
         sym_interpret->repeat = (wire->flags & 0x01);
-        translate_action(&sym_interpret->action,
+        translate_action(&sym_interpret->a.action,
                          (xcb_xkb_action_t *) &wire->action);
+        sym_interpret->num_actions =
+            (sym_interpret->a.action.type != ACTION_TYPE_NONE);
+
+        /* Checked only when compiling a keymap from text */
+        sym_interpret->required = true;
 
         xcb_xkb_sym_interpret_next(&iter);
     }
@@ -886,9 +929,10 @@ get_type_names(struct xkb_keymap *keymap, struct x11_atom_interner *interner,
         uint8_t wire_num_levels = *n_levels_per_type_iter;
         struct xkb_key_type *type = &keymap->types[i];
 
-        /* Levels must have names. */
-        FAIL_UNLESS(type->num_levels == wire_num_levels);
+        /* Levels names are optional, but the maximum is the level count */
+        FAIL_UNLESS(type->num_levels >= wire_num_levels);
 
+        /* Allocate names for all levels, even if some names are missing */
         ALLOC_OR_FAIL(type->level_names, type->num_levels);
 
         x11_atom_interner_adopt_atom(interner, wire_type_name, &type->name);
@@ -896,6 +940,10 @@ get_type_names(struct xkb_keymap *keymap, struct x11_atom_interner *interner,
             x11_atom_interner_adopt_atom(interner, kt_level_names_iter[j],
                                          &type->level_names[j]);
         }
+        /* We may have received less names than there are levels: ensure
+         * missing names have a fallback. */
+        for (size_t j = wire_num_levels; j < type->num_levels; j++)
+            type->level_names[j] = XKB_ATOM_NONE;
 
         type->num_level_names = type->num_levels;
         kt_level_names_iter += wire_num_levels;
@@ -920,7 +968,7 @@ get_indicator_names(struct xkb_keymap *keymap,
     FAIL_UNLESS(msb_pos(reply->indicators) <= keymap->num_leds);
 
     for (unsigned i = 0; i < NUM_INDICATORS; i++) {
-        if (reply->indicators & (1u << i)) {
+        if (reply->indicators & (UINT32_C(1) << i)) {
             xcb_atom_t wire = *iter;
             struct xkb_led *led = &keymap->leds[i];
 
@@ -950,7 +998,9 @@ get_vmod_names(struct xkb_keymap *keymap, struct x11_atom_interner *interner,
      */
     keymap->mods.num_mods =
         NUM_REAL_MODS + MIN(msb_pos(reply->virtualMods), NUM_VMODS);
+    FAIL_UNLESS(keymap->mods.num_mods <= XKB_MAX_MODS);
 
+    static_assert(NUM_REAL_MODS + NUM_VMODS <= XKB_MAX_MODS, "");
     for (unsigned i = 0; i < NUM_VMODS; i++) {
         if (reply->virtualMods & (1u << i)) {
             xcb_atom_t wire = *iter;
@@ -963,6 +1013,9 @@ get_vmod_names(struct xkb_keymap *keymap, struct x11_atom_interner *interner,
     }
 
     return true;
+
+fail:
+    return false;
 }
 
 static bool
@@ -1123,7 +1176,7 @@ get_controls(struct xkb_keymap *keymap, xcb_connection_t *conn,
     FAIL_UNLESS(keymap->max_key_code < XCB_XKB_CONST_PER_KEY_BIT_ARRAY_SIZE * 8);
 
     for (xkb_keycode_t i = keymap->min_key_code; i <= keymap->max_key_code; i++)
-        keymap->keys[i].repeats = (reply->perKeyRepeat[i / 8] & (1 << (i % 8)));
+        keymap->keys[i].repeats = (reply->perKeyRepeat[i / 8] & (1u << (i % 8)));
 
     free(reply);
     return true;
@@ -1133,7 +1186,7 @@ fail:
     return false;
 }
 
-XKB_EXPORT struct xkb_keymap *
+struct xkb_keymap *
 xkb_x11_keymap_new_from_device(struct xkb_context *ctx,
                                xcb_connection_t *conn,
                                int32_t device_id,
@@ -1143,12 +1196,14 @@ xkb_x11_keymap_new_from_device(struct xkb_context *ctx,
     const enum xkb_keymap_format format = XKB_KEYMAP_FORMAT_TEXT_V1;
 
     if (flags & ~(XKB_KEYMAP_COMPILE_NO_FLAGS)) {
-        log_err_func(ctx, "unrecognized flags: %#x\n", flags);
+        log_err_func(ctx, XKB_LOG_MESSAGE_NO_ID,
+                     "unrecognized flags: %#x\n", flags);
         return NULL;
     }
 
     if (device_id < 0 || device_id > 127) {
-        log_err_func(ctx, "illegal device ID: %d\n", device_id);
+        log_err_func(ctx, XKB_LOG_MESSAGE_NO_ID,
+                     "illegal device ID: %"PRId32"\n", device_id);
         return NULL;
     }
 
